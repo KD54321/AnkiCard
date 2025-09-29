@@ -54,7 +54,6 @@ export default function CardFormatOptions({
         </p>
       </div>
 
-      {/* Format Selection */}
       <Card>
         <CardHeader>
           <CardTitle>Card Format</CardTitle>
@@ -91,7 +90,7 @@ export default function CardFormatOptions({
                   Fill-in-the-blank style cards that hide key terms
                 </p>
                 <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                  <strong>Card:</strong> Plants use {{c1::photosynthesis}} to convert light into energy
+                  <strong>Card:</strong> Plants use {'{'}{'{'} c1::photosynthesis {'}'}{'}'}  to convert light into energy
                 </div>
               </div>
             </div>
@@ -114,7 +113,6 @@ export default function CardFormatOptions({
         </CardContent>
       </Card>
 
-      {/* Card Settings */}
       <Card>
         <CardHeader>
           <CardTitle>Card Settings</CardTitle>
@@ -155,7 +153,6 @@ export default function CardFormatOptions({
         </CardContent>
       </Card>
 
-      {/* Export Section */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
