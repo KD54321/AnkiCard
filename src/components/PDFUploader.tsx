@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Upload, FileText, AlertCircle } from 'lucide-react';
+import React, { useCallback, useState } from 'react';
+import { Upload, FileText, AlertCircle, CheckCircle } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
 import { Alert, AlertDescription } from './ui/alert';
@@ -19,8 +19,15 @@ export default function PDFUploader({
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const handleFile = async (file: File) => {
+    console.log('Processing file:', file.name, 'Size:', file.size);
+    
+    // Reset states
+    setError(null);
+    setSuccess(null);
+    
     // Validate file
     const validation = PDFService.validateFile(file);
     if (!validation.valid) {
@@ -28,7 +35,6 @@ export default function PDFUploader({
       return;
     }
 
-    setError(null);
     setIsUploading(true);
     setUploadProgress(0);
 
@@ -36,33 +42,44 @@ export default function PDFUploader({
       // Simulate upload progress
       const progressInterval = setInterval(() => {
         setUploadProgress(prev => {
-          if (prev >= 90) {
+          if (prev >= 80) {
             clearInterval(progressInterval);
-            return 90;
+            return 80;
           }
-          return prev + 10;
+          return prev + 20;
         });
-      }, 200);
+      }, 300);
 
       // Extract PDF content
       const extractedContent = await PDFService.extractText(file);
-      const combinedText = extractedContent.pages.map(p => p.text).join('\n\n');
+      const combinedText = extractedContent.pages
+        .map(p => p.text)
+        .filter(text => text && text.length > 0)
+        .join('\n\n');
+      
       clearInterval(progressInterval);
       setUploadProgress(100);
+      
+      if (combinedText.length < 50) {
+        throw new Error('PDF appears to contain very little readable text. Please try a different PDF.');
+      }
+      
+      setSuccess(`Successfully extracted ${extractedContent.pageCount} pages from ${file.name}`);
       
       // Call the callback with extracted content
       setTimeout(() => {
         onFileProcessed({
-  text: combinedText,
-  pageCount: extractedContent.pageCount,
-  title: extractedContent.title
-});
+          text: combinedText,
+          pageCount: extractedContent.pageCount,
+          title: extractedContent.title
+        });
         setIsUploading(false);
         setUploadProgress(0);
-      }, 500);
+      }, 1000);
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to process PDF');
+      console.error('PDF processing error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to process PDF. Please try a different file.');
       setIsUploading(false);
       setUploadProgress(0);
     }
@@ -73,25 +90,30 @@ export default function PDFUploader({
     if (file) {
       handleFile(file);
     }
+    // Reset input to allow same file selection
+    e.target.value = '';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragOver(false);
     
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      handleFile(file);
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFile(files[0]);
     }
   };
 
@@ -113,6 +135,15 @@ export default function PDFUploader({
         </Alert>
       )}
 
+      {success && (
+        <Alert className="mb-4 border-green-200 bg-green-50">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-700">
+            {success}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card className={`border-2 border-dashed transition-colors ${
         isDragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-400'
       }`}>
@@ -127,7 +158,7 @@ export default function PDFUploader({
           >
             <input
               type="file"
-              accept=".pdf"
+              accept=".pdf,application/pdf"
               onChange={handleFileInput}
               disabled={isUploading || isProcessing}
               className="hidden"
@@ -171,6 +202,7 @@ export default function PDFUploader({
 
       <div className="mt-4 text-center text-sm text-gray-500">
         <p>Supported format: PDF • Maximum size: 10MB</p>
+        <p className="mt-1">Make sure your PDF contains readable text (not just images)</p>
       </div>
     </div>
   );

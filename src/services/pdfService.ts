@@ -1,52 +1,71 @@
 import * as pdfjsLib from "pdfjs-dist";
-import Tesseract from "tesseract.js";
 
-// Configure worker (browser build)
-if (pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-}
+// Configure worker for browser environment
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export const PDFService = {
   validateFile(file: File) {
-    if (!file.name.endsWith(".pdf")) return { valid: false, error: "File must be a PDF" };
-    if (file.size > 10 * 1024 * 1024) return { valid: false, error: "File size exceeds 10MB" };
+    if (!file) return { valid: false, error: "No file provided" };
+    if (!file.name.toLowerCase().endsWith(".pdf")) return { valid: false, error: "File must be a PDF" };
+    if (file.size > 10 * 1024 * 1024) return { valid: false, error: "File size exceeds 10MB limit" };
+    if (file.size === 0) return { valid: false, error: "File appears to be empty" };
     return { valid: true };
   },
 
   async extractText(
     file: File
   ): Promise<{ title: string; pageCount: number; pages: { number: number; text: string }[] }> {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ 
+        data: arrayBuffer,
+        useSystemFonts: true 
+      }).promise;
 
-    const pageCount = pdf.numPages;
-    const pages: { number: number; text: string }[] = [];
+      const pageCount = pdf.numPages;
+      const pages: { number: number; text: string }[] = [];
 
-    for (let i = 1; i <= pageCount; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map((item: any) => item.str).join(" ").trim();
+      for (let i = 1; i <= pageCount; i++) {
+        try {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          
+          // Extract text with better formatting
+          const pageText = content.items
+            .map((item: any) => {
+              if (item.str && item.str.trim()) {
+                return item.str;
+              }
+              return '';
+            })
+            .filter(text => text.length > 0)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
 
-      if (pageText && pageText.length > 5) {
-        pages.push({ number: i, text: pageText });
-      } else {
-        // Fallback to OCR
-        const viewport = page.getViewport({ scale: 2 });
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d");
-        if (!context) continue;
-
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-
-        await page.render({ canvasContext: context, viewport }).promise;
-        const dataUrl = canvas.toDataURL("image/png");
-
-        const ocrResult = await Tesseract.recognize(dataUrl, "eng");
-        pages.push({ number: i, text: ocrResult.data.text.trim() });
+          if (pageText && pageText.length > 10) {
+            pages.push({ number: i, text: pageText });
+          } else {
+            // Add placeholder for empty pages
+            pages.push({ number: i, text: `[Page ${i} - No readable text found]` });
+          }
+        } catch (pageError) {
+          console.warn(`Error processing page ${i}:`, pageError);
+          pages.push({ number: i, text: `[Page ${i} - Error reading page]` });
+        }
       }
-    }
 
-    return { title: file.name, pageCount, pages };
+      // Clean up the PDF document
+      pdf.destroy();
+
+      return { 
+        title: file.name.replace('.pdf', ''), 
+        pageCount, 
+        pages 
+      };
+    } catch (error) {
+      console.error('PDF extraction error:', error);
+      throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   },
 };
