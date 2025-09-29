@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Upload, FileText, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
@@ -46,13 +46,17 @@ export default function PDFUploader({
 
       // Extract PDF content
       const extractedContent = await PDFService.extractText(file);
-      
+      const combinedText = extractedContent.pages.map(p => p.text).join('\n\n');
       clearInterval(progressInterval);
       setUploadProgress(100);
       
       // Call the callback with extracted content
       setTimeout(() => {
-        onFileProcessed(extractedContent);
+        onFileProcessed({
+  text: combinedText,
+  pageCount: extractedContent.pageCount,
+  title: extractedContent.title
+});
         setIsUploading(false);
         setUploadProgress(0);
       }, 500);

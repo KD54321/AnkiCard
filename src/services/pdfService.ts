@@ -1,53 +1,52 @@
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from "pdfjs-dist";
+import Tesseract from "tesseract.js";
 
-// Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-export interface ExtractedContent {
-  text: string;
-  pageCount: number;
-  title?: string;
+// Configure worker (browser build)
+if (pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 }
 
-export class PDFService {
-  static async extractText(file: File): Promise<ExtractedContent> {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      
-      let fullText = '';
-      const pageCount = pdf.numPages;
-      
-      // Extract text from all pages
-      for (let i = 1; i <= pageCount; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-          .map((item: any) => item.str)
-          .join(' ');
-        fullText += pageText + '\n\n';
-      }
-      
-      return {
-        text: fullText.trim(),
-        pageCount,
-        title: file.name.replace('.pdf', '')
-      };
-    } catch (error) {
-      console.error('PDF extraction error:', error);
-      throw new Error('Failed to extract text from PDF');
-    }
-  }
-  
-  static validateFile(file: File): { valid: boolean; error?: string } {
-    if (file.type !== 'application/pdf') {
-      return { valid: false, error: 'Please upload a PDF file' };
-    }
-    
-    if (file.size > 10 * 1024 * 1024) { // 10MB limit
-      return { valid: false, error: 'File size must be less than 10MB' };
-    }
-    
+export const PDFService = {
+  validateFile(file: File) {
+    if (!file.name.endsWith(".pdf")) return { valid: false, error: "File must be a PDF" };
+    if (file.size > 10 * 1024 * 1024) return { valid: false, error: "File size exceeds 10MB" };
     return { valid: true };
-  }
-}
+  },
+
+  async extractText(
+    file: File
+  ): Promise<{ title: string; pageCount: number; pages: { number: number; text: string }[] }> {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    const pageCount = pdf.numPages;
+    const pages: { number: number; text: string }[] = [];
+
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map((item: any) => item.str).join(" ").trim();
+
+      if (pageText && pageText.length > 5) {
+        pages.push({ number: i, text: pageText });
+      } else {
+        // Fallback to OCR
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) continue;
+
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        await page.render({ canvasContext: context, viewport }).promise;
+        const dataUrl = canvas.toDataURL("image/png");
+
+        const ocrResult = await Tesseract.recognize(dataUrl, "eng");
+        pages.push({ number: i, text: ocrResult.data.text.trim() });
+      }
+    }
+
+    return { title: file.name, pageCount, pages };
+  },
+};

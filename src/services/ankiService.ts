@@ -1,51 +1,68 @@
-import JSZip from 'jszip';
-import { FlashCard } from './aiService';
+// services/ankiService.ts
+export interface FlashCard {
+  front: string;
+  back: string;
+  imageData?: string; // Base64 image string
+  imageName?: string; // optional name for image file
+
+}
 
 export class AnkiService {
-  static async generateAnkiPackage(cards: FlashCard[], deckName: string = 'Generated Deck'): Promise<Blob> {
-    const zip = new JSZip();
-    
-    // Create collection.anki2 (SQLite database structure as text for simplicity)
-    const collectionData = this.createCollectionData(cards, deckName);
-    zip.file('collection.anki2', collectionData);
-    
-    // Create media files (empty for now)
-    zip.file('media', '{}');
-    
-    // Generate the zip file
-    const blob = await zip.generateAsync({ type: 'blob' });
-    return blob;
+  // Helper to call AnkiConnect
+  private static async invoke(action: string, params: any = {}) {
+    const response = await fetch("http://127.0.0.1:8765", {
+      method: "POST",
+      body: JSON.stringify({ action, version: 6, params }),
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error);
+    return data.result;
   }
-  
-  private static createCollectionData(cards: FlashCard[], deckName: string): string {
-    // This is a simplified version - real Anki packages use SQLite
-    // For production, you'd want to use a proper Anki package generator
-    const timestamp = Date.now();
-    
-    const ankiData = {
-      version: 1,
-      deckName,
-      cards: cards.map((card, index) => ({
-        id: timestamp + index,
-        front: card.front,
-        back: card.back,
-        type: card.type,
-        tags: card.tags?.join(' ') || '',
-        created: timestamp
-      }))
-    };
-    
-    return JSON.stringify(ankiData, null, 2);
+
+  // Create deck if it doesn’t exist
+  static async createDeck(deckName: string) {
+    return this.invoke("createDeck", { deck: deckName });
   }
-  
-  static downloadFile(blob: Blob, filename: string): void {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+
+  // Push notes (flashcards) to Anki
+  static async addNotes(
+    deckName: string,
+    flashcards: FlashCard[],
+    format: "basic" | "cloze"
+  ) {
+    const modelName = format === "cloze" ? "Cloze" : "Basic";
+
+ const notes = flashcards.map((card) => {
+      const fields: Record<string, string> = {
+        Front: card.front,
+        Back: card.back,
+      };
+
+      // If there is an image, add a placeholder to the back
+      const fldsWithImage = { ...fields };
+      if (card.imageData && card.imageName) {
+        fldsWithImage.Back += `<br><img src="${card.imageName}" />`;
+      }
+
+      return {
+        deckName,
+        modelName,
+        fields: fldsWithImage,
+        options: { allowDuplicate: false },
+        tags: ["Notes", "pdf-import"],
+        audio: [],
+        picture: card.imageData
+          ? [
+              {
+                data: card.imageData,
+                filename: card.imageName,
+                fields: ["Back"], // attach to back field
+              },
+            ]
+          : [],
+      };
+    });
+
+    return this.invoke("addNotes", { notes });
   }
 }

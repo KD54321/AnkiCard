@@ -1,4 +1,4 @@
-import React from 'react';
+import * as React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
@@ -14,32 +14,62 @@ interface CardFormatOptionsProps {
   onFormatChange?: (format: 'basic' | 'cloze' | 'image') => void;
   flashcards?: FlashCard[];
   deckName?: string;
+  extractedText?: string;
 }
 
 export default function CardFormatOptions({ 
   selectedFormat = 'basic',
   onFormatChange = () => {},
   flashcards = [],
-  deckName = 'Generated Deck'
+  deckName = 'Generated Deck',
+  extractedText = ''
 }: CardFormatOptionsProps) {
   const [cardCount, setCardCount] = React.useState([10]);
   const [includeTags, setIncludeTags] = React.useState(true);
   const [isExporting, setIsExporting] = React.useState(false);
 
-  const handleExport = async () => {
-    if (flashcards.length === 0) {
-      alert('No flashcards to export. Please upload and process a PDF first.');
-      return;
-    }
-
+  const handleExportToAnki = async () => {
     setIsExporting(true);
+
     try {
-      const blob = await AnkiService.generateAnkiPackage(flashcards, deckName);
-      const filename = `${deckName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.apkg`;
-      AnkiService.downloadFile(blob, filename);
+      // Create deck if it doesn't exist
+      await AnkiService.createDeck(deckName);
+
+      // Prepare cards to send
+      let cardsToSend = flashcards.slice(0, cardCount[0]);
+
+      // Auto-generate flashcards from extracted text if none exist
+      if (cardsToSend.length === 0 && extractedText.trim().length > 0) {
+        const sentences = extractedText
+          .split(/[.\n]/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0);
+
+        cardsToSend = sentences.slice(0, cardCount[0]).map((sentence, idx) => ({
+          id: idx.toString(),
+          front: sentence,
+          back: '', // leave blank or add simple summary
+          type: selectedFormat === 'cloze' ? 'cloze' : 'basic',
+          tags: includeTags ? ['PDFNotes'] : []
+        }));
+      }
+
+      if (cardsToSend.length === 0) {
+        alert("No flashcards to export. Please upload and process a PDF first.");
+        return;
+      }
+
+      // Send flashcards to Anki
+      await AnkiService.addNotes(
+        deckName,
+        cardsToSend,
+        selectedFormat === 'image' ? 'basic' : selectedFormat
+      );
+
+      alert(`Successfully exported ${cardsToSend.length} cards to Anki deck "${deckName}"!`);
     } catch (error) {
-      console.error('Export error:', error);
-      alert('Failed to export Anki package. Please try again.');
+      console.error(error);
+      alert("Failed to connect to Anki. Make sure Anki Desktop is running with AnkiConnect installed.");
     } finally {
       setIsExporting(false);
     }
@@ -47,13 +77,13 @@ export default function CardFormatOptions({
 
   return (
     <div className="w-full max-w-2xl mx-auto p-6 bg-white space-y-6">
+      {/* Header */}
       <div className="text-center mb-6">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Card Format Options</h2>
-        <p className="text-gray-600">
-          Choose how you want your flashcards formatted
-        </p>
+        <p className="text-gray-600">Choose how you want your flashcards formatted</p>
       </div>
 
+      {/* Card Format Selection */}
       <Card>
         <CardHeader>
           <CardTitle>Card Format</CardTitle>
@@ -67,61 +97,44 @@ export default function CardFormatOptions({
             <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-gray-50">
               <RadioGroupItem value="basic" id="basic" className="mt-1" />
               <div className="flex-1">
-                <Label htmlFor="basic" className="font-medium cursor-pointer">
-                  Basic Cards
-                </Label>
+                <Label htmlFor="basic" className="font-medium cursor-pointer">Basic Cards</Label>
                 <p className="text-sm text-gray-600 mt-1">
                   Traditional front/back flashcards with questions and answers
                 </p>
-                <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                  <strong>Front:</strong> What is photosynthesis?<br />
-                  <strong>Back:</strong> The process by which plants convert light energy into chemical energy
-                </div>
               </div>
             </div>
 
             <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-gray-50">
               <RadioGroupItem value="cloze" id="cloze" className="mt-1" />
               <div className="flex-1">
-                <Label htmlFor="cloze" className="font-medium cursor-pointer">
-                  Cloze Deletion
-                </Label>
+                <Label htmlFor="cloze" className="font-medium cursor-pointer">Cloze Deletion</Label>
                 <p className="text-sm text-gray-600 mt-1">
                   Fill-in-the-blank style cards that hide key terms
                 </p>
-                <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                  <strong>Card:</strong> Plants use {'{'}{'{'} c1::photosynthesis {'}'}{'}'}  to convert light into energy
-                </div>
               </div>
             </div>
 
             <div className="flex items-start space-x-3 p-4 border rounded-lg hover:bg-gray-50">
               <RadioGroupItem value="image" id="image" className="mt-1" />
               <div className="flex-1">
-                <Label htmlFor="image" className="font-medium cursor-pointer">
-                  Image-based Cards
-                </Label>
+                <Label htmlFor="image" className="font-medium cursor-pointer">Image-based Cards</Label>
                 <p className="text-sm text-gray-600 mt-1">
-                  Cards that include visual elements and diagrams
+                  Currently generates text-based cards with image placeholders
                 </p>
-                <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
-                  <strong>Note:</strong> Currently generates text-based cards with image placeholders
-                </div>
               </div>
             </div>
           </RadioGroup>
         </CardContent>
       </Card>
 
+      {/* Card Settings */}
       <Card>
         <CardHeader>
           <CardTitle>Card Settings</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div>
-            <Label className="text-sm font-medium">
-              Maximum Cards: {cardCount[0]}
-            </Label>
+            <Label className="text-sm font-medium">Maximum Cards: {cardCount[0]}</Label>
             <Slider
               value={cardCount}
               onValueChange={setCardCount}
@@ -130,19 +143,11 @@ export default function CardFormatOptions({
               step={5}
               className="mt-2"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Limit the number of flashcards generated
-            </p>
           </div>
 
           <div className="flex items-center justify-between">
             <div>
-              <Label htmlFor="include-tags" className="text-sm font-medium">
-                Include Tags
-              </Label>
-              <p className="text-xs text-gray-500">
-                Add topic tags to organize your cards
-              </p>
+              <Label htmlFor="include-tags" className="text-sm font-medium">Include Tags</Label>
             </div>
             <Switch
               id="include-tags"
@@ -153,6 +158,7 @@ export default function CardFormatOptions({
         </CardContent>
       </Card>
 
+      {/* Export Button */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -162,37 +168,25 @@ export default function CardFormatOptions({
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="p-4 bg-blue-50 rounded-lg">
-              <h4 className="font-medium text-blue-900 mb-2">Ready to Export</h4>
-              <p className="text-sm text-blue-700">
-                {flashcards.length > 0 
-                  ? `${flashcards.length} flashcards ready for export`
-                  : 'Upload and process a PDF to generate flashcards'
-                }
-              </p>
-            </div>
-
-            <Button 
-              onClick={handleExport}
-              disabled={flashcards.length === 0 || isExporting}
+            <Button
+              onClick={handleExportToAnki}
+              disabled={isExporting}
               className="w-full"
-              size="lg"
             >
               {isExporting ? (
                 <>
                   <FileDown className="mr-2 h-4 w-4 animate-pulse" />
-                  Generating Package...
+                  Exporting...
                 </>
               ) : (
                 <>
                   <FileDown className="mr-2 h-4 w-4" />
-                  Download Anki Package (.apkg)
+                  Send to Anki Desktop
                 </>
               )}
             </Button>
-
             <p className="text-xs text-gray-500 text-center">
-              The downloaded file can be imported directly into Anki
+              Make sure Anki Desktop is open with AnkiConnect installed
             </p>
           </div>
         </CardContent>

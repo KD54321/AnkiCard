@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
@@ -6,7 +6,7 @@ import { FileText, Eye, Settings, History } from 'lucide-react';
 import PDFUploader from './PDFUploader';
 import ContentPreview from './ContentPreview';
 import CardFormatOptions from './CardFormatOptions';
-import { FlashCard } from '../services/aiService';
+import { FlashCard } from '../services/parserService';
 
 interface ExtractedContent {
   text: string;
@@ -29,8 +29,7 @@ export default function Home() {
   const handleFileProcessed = (content: ExtractedContent) => {
     setExtractedContent(content);
     setActiveTab('preview');
-    
-    // Add to history
+
     const historyItem = {
       id: Date.now().toString(),
       title: content.title || 'Untitled Document',
@@ -42,8 +41,7 @@ export default function Home() {
 
   const handleContentProcessed = (cards: FlashCard[]) => {
     setFlashcards(cards);
-    
-    // Update history with card count
+
     setProcessingHistory(prev => 
       prev.map((item, index) => 
         index === 0 ? { ...item, cardCount: cards.length } : item
@@ -53,7 +51,6 @@ export default function Home() {
 
   const handleFormatChange = (format: 'basic' | 'cloze' | 'image') => {
     setCardFormat(format);
-    // This will trigger reprocessing in ContentPreview component
   };
 
   const getTabStatus = (tab: string) => {
@@ -63,7 +60,7 @@ export default function Home() {
       case 'preview':
         return !extractedContent ? 'disabled' : flashcards.length > 0 ? 'completed' : 'current';
       case 'format':
-        return flashcards.length === 0 ? 'disabled' : 'current';
+        return extractedContent ? 'current' : 'disabled';
       case 'history':
         return 'available';
       default:
@@ -74,11 +71,11 @@ export default function Home() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Badge variant="default" className="ml-2 bg-green-500">✓</Badge>;
+        return <Badge className="ml-2 bg-green-500">✓</Badge>;
       case 'current':
-        return <Badge variant="secondary" className="ml-2">Current</Badge>;
+        return <Badge className="ml-2 bg-gray-200 text-gray-700">Current</Badge>;
       case 'disabled':
-        return <Badge variant="outline" className="ml-2 opacity-50">Locked</Badge>;
+        return <Badge className="ml-2 opacity-50 border border-gray-300">Locked</Badge>;
       default:
         return null;
     }
@@ -87,17 +84,15 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto py-8">
-        {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             PDF Notes to Anki Cards Converter
           </h1>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Transform your class notes into study-ready flashcards with AI-powered content extraction
+            Transform your class notes into study-ready flashcards
           </p>
         </div>
 
-        {/* Progress Indicator */}
         <div className="mb-8">
           <div className="flex justify-center items-center space-x-4 text-sm">
             <div className={`flex items-center ${getTabStatus('upload') === 'completed' ? 'text-green-600' : 'text-blue-600'}`}>
@@ -135,54 +130,31 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Main Content */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-4 max-w-2xl mx-auto mb-8">
-            <TabsTrigger 
-              value="upload" 
-              className="flex items-center"
-              disabled={false}
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              Upload
+            <TabsTrigger value="upload" className="flex items-center" disabled={false}>
+              <FileText className="w-4 h-4 mr-2" /> Upload
               {getStatusBadge(getTabStatus('upload'))}
             </TabsTrigger>
-            <TabsTrigger 
-              value="preview" 
-              className="flex items-center"
-              disabled={getTabStatus('preview') === 'disabled'}
-            >
-              <Eye className="w-4 h-4 mr-2" />
-              Preview
+            <TabsTrigger value="preview" className="flex items-center" disabled={getTabStatus('preview') === 'disabled'}>
+              <Eye className="w-4 h-4 mr-2" /> Preview
               {getStatusBadge(getTabStatus('preview'))}
             </TabsTrigger>
-            <TabsTrigger 
-              value="format" 
-              className="flex items-center"
-              disabled={getTabStatus('format') === 'disabled'}
-            >
-              <Settings className="w-4 h-4 mr-2" />
-              Format
+            <TabsTrigger value="format" className="flex items-center" disabled={getTabStatus('format') === 'disabled'}>
+              <Settings className="w-4 h-4 mr-2" /> Format
               {getStatusBadge(getTabStatus('format'))}
             </TabsTrigger>
-            <TabsTrigger 
-              value="history" 
-              className="flex items-center"
-            >
-              <History className="w-4 h-4 mr-2" />
-              History
+            <TabsTrigger value="history" className="flex items-center">
+              <History className="w-4 h-4 mr-2" /> History
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload">
-            <PDFUploader 
-              onFileProcessed={handleFileProcessed}
-              isProcessing={false}
-            />
+            <PDFUploader onFileProcessed={handleFileProcessed} isProcessing={false} />
           </TabsContent>
 
           <TabsContent value="preview">
-            <ContentPreview 
+            <ContentPreview
               extractedContent={extractedContent}
               onContentProcessed={handleContentProcessed}
               cardFormat={cardFormat}
@@ -190,46 +162,36 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="format">
-            <CardFormatOptions 
+            <CardFormatOptions
               selectedFormat={cardFormat}
               onFormatChange={handleFormatChange}
               flashcards={flashcards}
               deckName={extractedContent?.title || 'Generated Deck'}
+              extractedText={extractedContent?.text || ''}
             />
           </TabsContent>
 
           <TabsContent value="history">
             <div className="w-full max-w-4xl mx-auto p-6 bg-white">
               <h2 className="text-2xl font-bold text-gray-900 mb-6">Processing History</h2>
-              
               {processingHistory.length === 0 ? (
                 <Card className="border-dashed border-2 border-gray-300">
                   <CardContent className="p-12 text-center">
                     <History className="mx-auto h-16 w-16 text-gray-400 mb-4" />
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">
-                      No history yet
-                    </h3>
-                    <p className="text-gray-500">
-                      Your processed documents will appear here
-                    </p>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No history yet</h3>
+                    <p className="text-gray-500">Your processed documents will appear here</p>
                   </CardContent>
                 </Card>
               ) : (
                 <div className="space-y-4">
                   {processingHistory.map((item) => (
                     <Card key={item.id} className="hover:shadow-md transition-shadow">
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="font-medium text-gray-900">{item.title}</h3>
-                            <p className="text-sm text-gray-500">Processed on {item.date}</p>
-                          </div>
-                          <div className="text-right">
-                            <Badge variant="secondary">
-                              {item.cardCount} cards
-                            </Badge>
-                          </div>
+                      <CardContent className="p-4 flex justify-between items-center">
+                        <div>
+                          <h3 className="font-medium text-gray-900">{item.title}</h3>
+                          <p className="text-sm text-gray-500">Processed on {item.date}</p>
                         </div>
+                        <Badge>{item.cardCount} cards</Badge>
                       </CardContent>
                     </Card>
                   ))}
