@@ -1,7 +1,10 @@
 import * as pdfjsLib from "pdfjs-dist";
 
-// Configure worker for browser environment
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Configure worker for browser environment - use local worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.js',
+  import.meta.url
+).toString();
 
 export const PDFService = {
   validateFile(file: File) {
@@ -19,7 +22,9 @@ export const PDFService = {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ 
         data: arrayBuffer,
-        useSystemFonts: true 
+        useSystemFonts: true,
+        // Disable worker if there are issues
+        disableWorker: false
       }).promise;
 
       const pageCount = pdf.numPages;
@@ -65,7 +70,46 @@ export const PDFService = {
       };
     } catch (error) {
       console.error('PDF extraction error:', error);
-      throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      
+      // Fallback: try without worker
+      try {
+        console.log('Retrying PDF extraction without worker...');
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ 
+          data: arrayBuffer,
+          disableWorker: true
+        }).promise;
+
+        const pageCount = pdf.numPages;
+        const pages: { number: number; text: string }[] = [];
+
+        for (let i = 1; i <= Math.min(pageCount, 5); i++) { // Limit to first 5 pages for fallback
+          try {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            
+            const pageText = content.items
+              .map((item: any) => item.str || '')
+              .filter(text => text.trim().length > 0)
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+            pages.push({ number: i, text: pageText || `[Page ${i} - No text found]` });
+          } catch (pageError) {
+            pages.push({ number: i, text: `[Page ${i} - Error reading page]` });
+          }
+        }
+
+        pdf.destroy();
+        return { 
+          title: file.name.replace('.pdf', ''), 
+          pageCount, 
+          pages 
+        };
+      } catch (fallbackError) {
+        throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     }
   },
 };
