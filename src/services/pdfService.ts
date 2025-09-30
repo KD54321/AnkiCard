@@ -1,10 +1,8 @@
+// src/services/pdfService.ts
 import * as pdfjsLib from "pdfjs-dist";
 
-// Configure worker for browser environment - use local worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.js',
-  import.meta.url
-).toString();
+// Configure worker to use local file copied by vite-plugin-static-copy
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 export const PDFService = {
   validateFile(file: File) {
@@ -19,50 +17,77 @@ export const PDFService = {
     file: File
   ): Promise<{ title: string; pageCount: number; pages: { number: number; text: string }[] }> {
     try {
+      console.log('Starting PDF extraction for:', file.name);
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ 
+      console.log('ArrayBuffer loaded, size:', arrayBuffer.byteLength);
+      
+      const loadingTask = pdfjsLib.getDocument({ 
         data: arrayBuffer,
         useSystemFonts: true,
-        // Disable worker if there are issues
-        disableWorker: false
-      }).promise;
+      });
+
+      console.log('Loading PDF document...');
+      const pdf = await loadingTask.promise;
+      console.log('PDF loaded successfully, total pages:', pdf.numPages);
 
       const pageCount = pdf.numPages;
       const pages: { number: number; text: string }[] = [];
 
-      for (let i = 1; i <= pageCount; i++) {
-        try {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          
-          // Extract text with better formatting
-          const pageText = content.items
-            .map((item: any) => {
-              if (item.str && item.str.trim()) {
-                return item.str;
-              }
-              return '';
-            })
-            .filter(text => text.length > 0)
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+      // Process pages in batches to avoid memory issues
+      const batchSize = 5;
+      for (let batch = 0; batch < Math.ceil(pageCount / batchSize); batch++) {
+        const startPage = batch * batchSize + 1;
+        const endPage = Math.min((batch + 1) * batchSize, pageCount);
+        
+        console.log(`Processing batch ${batch + 1}: pages ${startPage}-${endPage}`);
+        
+        for (let i = startPage; i <= endPage; i++) {
+          try {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            
+            // Extract text with better formatting
+            const pageText = content.items
+              .map((item: any) => {
+                if ('str' in item && item.str && item.str.trim()) {
+                  return item.str;
+                }
+                return '';
+              })
+              .filter(text => text.length > 0)
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim();
 
-          if (pageText && pageText.length > 10) {
-            pages.push({ number: i, text: pageText });
-          } else {
-            // Add placeholder for empty pages
-            pages.push({ number: i, text: `[Page ${i} - No readable text found]` });
+            if (pageText && pageText.length > 10) {
+              pages.push({ number: i, text: pageText });
+              console.log(`✓ Page ${i}: ${pageText.length} characters extracted`);
+            } else {
+              console.warn(`⚠ Page ${i}: No readable text found`);
+              pages.push({ number: i, text: `[Page ${i} - No readable text found]` });
+            }
+            
+            // Clean up page resources
+            page.cleanup();
+          } catch (pageError) {
+            console.error(`✗ Error processing page ${i}:`, pageError);
+            pages.push({ number: i, text: `[Page ${i} - Error reading page]` });
           }
-        } catch (pageError) {
-          console.warn(`Error processing page ${i}:`, pageError);
-          pages.push({ number: i, text: `[Page ${i} - Error reading page]` });
         }
       }
 
       // Clean up the PDF document
+      await pdf.cleanup();
       pdf.destroy();
 
+      console.log('✓ PDF extraction complete:', pages.length, 'pages processed');
+      
+      // Check if we got any readable content
+      const totalTextLength = pages.reduce((sum, p) => sum + p.text.length, 0);
+      if (totalTextLength < 50) {
+        throw new Error('PDF appears to contain very little readable text. It may be image-based or scanned.');
+      }
+      
       return { 
         title: file.name.replace('.pdf', ''), 
         pageCount, 
@@ -71,45 +96,22 @@ export const PDFService = {
     } catch (error) {
       console.error('PDF extraction error:', error);
       
-      // Fallback: try without worker
-      try {
-        console.log('Retrying PDF extraction without worker...');
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ 
-          data: arrayBuffer,
-          disableWorker: true
-        }).promise;
-
-        const pageCount = pdf.numPages;
-        const pages: { number: number; text: string }[] = [];
-
-        for (let i = 1; i <= Math.min(pageCount, 5); i++) { // Limit to first 5 pages for fallback
-          try {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            
-            const pageText = content.items
-              .map((item: any) => item.str || '')
-              .filter(text => text.trim().length > 0)
-              .join(' ')
-              .replace(/\s+/g, ' ')
-              .trim();
-
-            pages.push({ number: i, text: pageText || `[Page ${i} - No text found]` });
-          } catch (pageError) {
-            pages.push({ number: i, text: `[Page ${i} - Error reading page]` });
-          }
+      // Provide helpful error messages
+      if (error instanceof Error) {
+        if (error.message.includes('workerSrc') || error.message.includes('worker')) {
+          throw new Error('PDF worker not loaded. Please refresh the page and try again.');
+        } else if (error.message.includes('Invalid PDF')) {
+          throw new Error('This file appears to be corrupted or is not a valid PDF.');
+        } else if (error.message.includes('password')) {
+          throw new Error('This PDF is password-protected. Please use an unprotected PDF.');
+        } else if (error.message.includes('little readable text')) {
+          throw new Error(error.message);
+        } else {
+          throw new Error(`Failed to extract text from PDF: ${error.message}`);
         }
-
-        pdf.destroy();
-        return { 
-          title: file.name.replace('.pdf', ''), 
-          pageCount, 
-          pages 
-        };
-      } catch (fallbackError) {
-        throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+      
+      throw new Error('Failed to extract text from PDF. Please try a different file.');
     }
   },
 };
