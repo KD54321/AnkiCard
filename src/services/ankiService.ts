@@ -10,7 +10,7 @@ export interface FlashCard {
 export class AnkiService {
   // Helper to call AnkiConnect
   private static async invoke(action: string, params: any = {}) {
-    const response = await fetch("http://127.0.0.1:8765", {
+    const response = await fetch("/anki", {
       method: "POST",
       body: JSON.stringify({ action, version: 6, params }),
     });
