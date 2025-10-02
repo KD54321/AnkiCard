@@ -148,5 +148,30 @@ The JSON format must be:
       .slice(0, 15);
     
     return [...new Set(concepts)];
+  },
+
+  async regenerateFlashcards(text: string, format: 'basic' | 'cloze' | 'image'): Promise<AIResponse> {
+    return this.generateFlashcards(text, format);
+  },
+
+  analyzeContent(text: string): {
+    wordCount: number;
+    estimatedReadingTime: number;
+    keyTopics: string[];
+    complexity: 'beginner' | 'intermediate' | 'advanced';
+  } {
+    const words = text.split(/\s+/).filter(word => word.length > 0);
+    const wordCount = words.length;
+    const estimatedReadingTime = Math.ceil(wordCount / 200); // 200 words per minute
+    
+    const concepts = this.extractConcepts(words);
+    const complexity = wordCount > 2000 ? 'advanced' : wordCount > 1000 ? 'intermediate' : 'beginner';
+    
+    return {
+      wordCount,
+      estimatedReadingTime,
+      keyTopics: concepts.slice(0, 5),
+      complexity
+    };
   }
 };

@@ -30,6 +30,7 @@ export default function Home() {
 
   const handleFileProcessed = (content: ExtractedContent) => {
     setExtractedContent(content);
+    setFlashcards([]); // Clear previous flashcards when new file is uploaded
     setActiveTab('preview');
 
     const historyItem = {
@@ -43,6 +44,7 @@ export default function Home() {
 
   const handleContentProcessed = (cards: FlashCard[]) => {
     setFlashcards(cards);
+    setActiveTab('format'); // Auto-advance to format tab
 
     setProcessingHistory(prev => 
       prev.map((item, index) => 
@@ -51,8 +53,26 @@ export default function Home() {
     );
   };
 
-  const handleFormatChange = (format: 'basic' | 'cloze' | 'image') => {
+  const handleFormatChange = async (format: 'basic' | 'cloze' | 'image') => {
     setCardFormat(format);
+    
+    // If we have extracted content and the format changed, regenerate cards
+    if (extractedContent && flashcards.length > 0) {
+      try {
+        const { AIService } = await import('../services/aiService');
+        const response = await AIService.regenerateFlashcards(extractedContent.text, format);
+        setFlashcards(response.cards);
+        
+        // Update history with new card count
+        setProcessingHistory(prev => 
+          prev.map((item, index) => 
+            index === 0 ? { ...item, cardCount: response.cards.length } : item
+          )
+        );
+      } catch (error) {
+        console.error('Failed to regenerate cards:', error);
+      }
+    }
   };
 
   const getTabStatus = (tab: string) => {
