@@ -45,22 +45,27 @@ export default function ContentPreview({
     setStatusMessage(null);
 
     try {
-      const hasApiKey = AIService.hasApiKey();
+      const hasApiKey = AIService.getApiKey() !== null;
       
       if (hasApiKey) {
         setStatusMessage({
           type: 'info',
-          message: 'Generating flashcards with AI... This may take 20-30 seconds on first run.'
+          message: 'Generating flashcards with OpenAI... This may take a few seconds.'
+        });
+      } else {
+        setStatusMessage({
+          type: 'info',
+          message: 'Generating flashcards with mock data (no API key found)...'
         });
       }
       
       console.log('Generating flashcards...');
-      const result = await AIService.extractFlashcards(editedText, cardFormat);
+      const result = await AIService.generateFlashcards(editedText, cardFormat);
       
       setFlashcards(result.cards);
       onContentProcessed(result.cards);
       
-      const mode = hasApiKey ? 'AI' : 'Basic pattern matching';
+      const mode = hasApiKey ? 'OpenAI API' : 'Mock data';
       setStatusMessage({
         type: 'success',
         message: `Generated ${result.cards.length} flashcards using ${mode}. ${result.concepts.length} key concepts identified.`
@@ -90,7 +95,7 @@ export default function ContentPreview({
     </div>
   );
 
-  const hasApiKey = AIService.hasApiKey();
+  const hasApiKey = AIService.getApiKey() !== null;
 
   return (
     <div className="w-full max-w-4xl mx-auto p-6 bg-white space-y-4">
@@ -123,9 +128,9 @@ export default function ContentPreview({
         <Alert className="border-yellow-200 bg-yellow-50">
           <AlertCircle className="h-4 w-4 text-yellow-600" />
           <AlertDescription className="text-yellow-700">
-            <strong>Using Basic Mode:</strong> No Hugging Face API token detected. 
-            Cards will be generated using pattern matching. 
-            For better results, go to Settings to add your free API token.
+            <strong>Using Mock Mode:</strong> No OpenAI API key detected. 
+            Cards will be generated using sample data. 
+            For AI-powered results, go to Settings to add your OpenAI API key.
           </AlertDescription>
         </Alert>
       )}
@@ -159,7 +164,7 @@ export default function ContentPreview({
             </div>
             <div className="text-right">
               <Badge variant={hasApiKey ? "default" : "outline"}>
-                {hasApiKey ? 'AI Mode' : 'Basic Mode'}
+                {hasApiKey ? 'AI Mode' : 'Mock Mode'}
               </Badge>
             </div>
           </div>
@@ -174,13 +179,13 @@ export default function ContentPreview({
             <ul className="text-xs text-blue-800 space-y-1 list-disc list-inside">
               {hasApiKey ? (
                 <>
-                  <li><strong>AI Mode:</strong> Intelligent extraction, understands context and medical terms</li>
-                  <li>First run may take 20-30 seconds (model loading), then faster</li>
+                  <li><strong>AI Mode:</strong> Intelligent extraction using OpenAI, understands context and medical terms</li>
+                  <li>AI processing may take a few seconds depending on content length</li>
                 </>
               ) : (
                 <>
-                  <li><strong>Basic Mode:</strong> Pattern matching (Term: Definition, bullet points)</li>
-                  <li>Add Hugging Face token in Settings for AI-powered extraction</li>
+                  <li><strong>Mock Mode:</strong> Sample flashcards generated from key concepts</li>
+                  <li>Add OpenAI API key in Settings for AI-powered extraction</li>
                 </>
               )}
               <li>Remove headers, footers, and page numbers for cleaner output</li>
@@ -214,7 +219,7 @@ export default function ContentPreview({
           ) : (
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
               {flashcards.map((card, index) => (
-                <Card key={card.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
+                <Card key={index} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow">
                   <CardContent className="p-4">
                     <div className="space-y-2">
                       <div>
@@ -231,7 +236,7 @@ export default function ContentPreview({
                         </div>
                       </div>
                       <div className="flex gap-2 pt-2 border-t flex-wrap">
-                        <Badge className="text-xs bg-gray-600">{card.type}</Badge>
+                        <Badge className="text-xs bg-gray-600">{cardFormat}</Badge>
                         {card.difficulty && (
                           <Badge 
                             className={`text-xs ${
@@ -249,11 +254,6 @@ export default function ContentPreview({
                           </Badge>
                         ))}
                       </div>
-                      {card.context && (
-                        <div className="text-xs text-gray-500 italic mt-2 bg-gray-50 p-2 rounded">
-                          Context: {card.context}
-                        </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
