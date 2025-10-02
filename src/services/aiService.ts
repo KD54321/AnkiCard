@@ -15,8 +15,13 @@ export interface AIResponse {
 }
 
 export const AIService = {
+  getApiKey(): string | null {
+    // Check session storage first, then environment variable
+    return sessionStorage.getItem('openai_api_key') || import.meta.env.VITE_OPENAI_API_KEY || null;
+  },
+
   async generateFlashcards(text: string, format: 'basic' | 'cloze' | 'image' = 'basic'): Promise<AIResponse> {
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+    const apiKey = this.getApiKey();
     
     if (!apiKey) {
       console.warn('OpenAI API key not found, using mock data');

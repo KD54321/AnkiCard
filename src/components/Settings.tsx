@@ -5,7 +5,6 @@ import { Label } from './ui/label';
 import { Button } from './ui/button';
 import { Alert, AlertDescription } from './ui/alert';
 import { Key, CheckCircle, AlertCircle, ExternalLink, Info, Brain } from 'lucide-react';
-import { AIService } from '../services/aiService';
 
 export default function Settings() {
   const [apiKey, setApiKey] = useState('');
@@ -27,20 +26,62 @@ export default function Settings() {
       return;
     }
 
-    AIService.setApiKey(apiKey);
+    // Store in sessionStorage for this session
+    sessionStorage.setItem('openai_api_key', apiKey);
     setSavedKey(apiKey.substring(0, 8) + '...' + apiKey.slice(-4));
     setApiKey('');
     setStatus('success');
-    setStatusMessage('API key saved! It will override the default .env key for this session.');
+    setStatusMessage('API key saved for this session! It will be used instead of the environment variable.');
   };
 
   const handleClearKey = () => {
-    AIService.setApiKey(null);
+    sessionStorage.removeItem('openai_api_key');
     setSavedKey('');
     setApiKey('');
     setStatus('idle');
     setStatusMessage('');
   };
+
+  const handleTestConnection = async () => {
+    const testKey = sessionStorage.getItem('openai_api_key') || import.meta.env.VITE_OPENAI_API_KEY;
+    
+    if (!testKey) {
+      setStatus('error');
+      setStatusMessage('No API key available to test');
+      return;
+    }
+
+    setStatus('idle');
+    setStatusMessage('Testing connection...');
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${testKey}`,
+        },
+      });
+
+      if (response.ok) {
+        setStatus('success');
+        setStatusMessage('API connection successful!');
+      } else {
+        setStatus('error');
+        setStatusMessage(`API test failed: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      setStatus('error');
+      setStatusMessage('Connection test failed. Check your internet connection.');
+    }
+  };
+
+  // Check if there's a saved key on component mount
+  useState(() => {
+    const saved = sessionStorage.getItem('openai_api_key');
+    if (saved) {
+      setSavedKey(saved.substring(0, 8) + '...' + saved.slice(-4));
+    }
+  });
 
   return (
     <div className="w-full max-w-2xl mx-auto p-6 bg-white space-y-6">
@@ -73,7 +114,7 @@ export default function Settings() {
               </Button>
             </div>
             <p className="text-xs text-gray-500">
-              Leave empty to use the default API key from your <code>.env</code> file.  
+              Leave empty to use the default API key from environment variables.  
               Get a key at{' '}
               <a
                 href="https://platform.openai.com/api-keys"
@@ -87,11 +128,11 @@ export default function Settings() {
             </p>
           </div>
 
-          {status === 'success' && savedKey && (
+          {status === 'success' && statusMessage && (
             <Alert className="border-green-200 bg-green-50">
               <CheckCircle className="h-4 w-4 text-green-600" />
               <AlertDescription className="text-green-700">
-                {statusMessage} ({savedKey})
+                {statusMessage} {savedKey && `(${savedKey})`}
               </AlertDescription>
             </Alert>
           )}
@@ -107,8 +148,11 @@ export default function Settings() {
             <Button onClick={handleSaveKey} className="flex-1">
               Save Key
             </Button>
+            <Button onClick={handleTestConnection} variant="outline" className="flex-1">
+              Test Connection
+            </Button>
             {savedKey && (
-              <Button onClick={handleClearKey} variant="outline" className="flex-1">
+              <Button onClick={handleClearKey} variant="outline">
                 Clear
               </Button>
             )}
@@ -134,7 +178,10 @@ export default function Settings() {
           <Alert className="bg-blue-50 border-blue-200">
             <Info className="h-4 w-4 text-blue-600" />
             <AlertDescription className="text-blue-700 text-sm">
-              Using the default API key from <code>.env</code> if no key is provided.
+              {savedKey 
+                ? `Using session API key (${savedKey})`
+                : 'Using environment variable API key if available'
+              }
             </AlertDescription>
           </Alert>
         </CardContent>
