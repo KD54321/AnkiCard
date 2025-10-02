@@ -13,6 +13,7 @@ interface ContentPreviewProps {
   cardFormat?: 'basic' | 'cloze' | 'image';
 }
 
+
 export default function ContentPreview({
   extractedContent,
   onContentProcessed = () => {},
