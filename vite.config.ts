@@ -31,14 +31,6 @@ export default defineConfig({
   server: {
     // @ts-ignore
     allowedHosts: true,
-    proxy: {
-      // Forward anything starting with /anki → AnkiConnect
-      "/anki": {
-        target: "http://127.0.0.1:8765",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/anki/, ""),
-      },
-    },
 
   }
 });
