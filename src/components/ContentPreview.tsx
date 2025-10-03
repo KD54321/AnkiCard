@@ -13,7 +13,6 @@ interface ContentPreviewProps {
   cardFormat?: 'basic' | 'cloze' | 'image';
 }
 
-
 export default function ContentPreview({
   extractedContent,
   onContentProcessed = () => {},
@@ -26,12 +25,57 @@ export default function ContentPreview({
     type: 'info' | 'success' | 'error';
     message: string;
   } | null>(null);
+  
+  // New state for JSON import
+  const [jsonInput, setJsonInput] = useState('');
+  const [showJsonImport, setShowJsonImport] = useState(false);
 
   useEffect(() => {
     if (extractedContent?.text) setEditedText(extractedContent.text);
   }, [extractedContent]);
 
   const handleTextChange = (value: string) => setEditedText(value);
+
+  // JSON Import Handler
+  const handleImportJSON = () => {
+    try {
+      const parsed = JSON.parse(jsonInput);
+      
+      if (!parsed.cards || !Array.isArray(parsed.cards)) {
+        throw new Error('Invalid format: missing "cards" array');
+      }
+
+      // Convert to FlashCard format
+      const importedCards: FlashCard[] = parsed.cards.map((card: any, index: number) => ({
+        id: `imported-${Date.now()}-${index}`,
+        front: card.front || '',
+        back: card.back || '',
+        type: cardFormat,
+        tags: Array.isArray(card.tags) ? card.tags : [],
+        difficulty: card.difficulty || 'medium'
+      })).filter((card: FlashCard) => card.front && card.back);
+
+      if (importedCards.length === 0) {
+        throw new Error('No valid cards found in JSON');
+      }
+
+      setFlashcards(importedCards);
+      onContentProcessed(importedCards);
+      setStatusMessage({
+        type: 'success',
+        message: `✅ Imported ${importedCards.length} cards from ChatGPT! Ready to export to Anki.`
+      });
+      setJsonInput('');
+      setShowJsonImport(false);
+
+      console.log(`Imported ${importedCards.length} cards`);
+    } catch (error) {
+      setStatusMessage({
+        type: 'error',
+        message: `Invalid JSON: ${error instanceof Error ? error.message : 'Please paste valid JSON from ChatGPT'}`
+      });
+    }
+  };
 
   const handleGenerateCards = async () => {
     if (!editedText || editedText.trim().length < 10) {
@@ -136,6 +180,71 @@ export default function ContentPreview({
         </Alert>
       )}
 
+      {/* JSON Import Section - STANDALONE CARD */}
+      <Card className="border-blue-200 bg-blue-50">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            <div className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-blue-600" />
+              <span className="text-blue-900">Import from ChatGPT</span>
+            </div>
+            <Button
+              onClick={() => setShowJsonImport(!showJsonImport)}
+              variant="outline"
+              size="sm"
+              className="bg-white"
+            >
+              {showJsonImport ? 'Hide' : 'Show'} Import
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        {showJsonImport && (
+          <CardContent className="space-y-3">
+            <p className="text-sm text-blue-700">
+              Paste the JSON response from ChatGPT below. This will replace any existing flashcards.
+            </p>
+            <Textarea
+              value={jsonInput}
+              onChange={(e) => setJsonInput(e.target.value)}
+              placeholder={`Paste ChatGPT JSON here, e.g.:
+{
+  "cards": [
+    {
+      "front": "What is myopia?",
+      "back": "A refractive error where distant objects appear blurry",
+      "tags": ["vision", "refractive-errors"],
+      "difficulty": "easy"
+    }
+  ],
+  "concepts": ["myopia", "refraction"],
+  "summary": "Overview of refractive errors"
+}`}
+              className="min-h-[150px] font-mono text-xs bg-white"
+            />
+            <div className="flex gap-2">
+              <Button
+                onClick={handleImportJSON}
+                disabled={!jsonInput.trim()}
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
+                <CheckCircle2 className="h-4 w-4 mr-2" />
+                Import JSON Cards
+              </Button>
+              <Button
+                onClick={() => {
+                  setJsonInput('');
+                  setShowJsonImport(false);
+                }}
+                variant="outline"
+                className="bg-white"
+              >
+                Cancel
+              </Button>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
       {/* Extracted Content Card */}
       <Card>
         <CardHeader>
@@ -191,6 +300,7 @@ export default function ContentPreview({
               )}
               <li>Remove headers, footers, and page numbers for cleaner output</li>
               <li>Format definitions as "Term: Definition" or use bullet points for best results</li>
+              <li><strong>Or use the Chrome Extension + ChatGPT workflow above!</strong></li>
             </ul>
           </div>
         </CardContent>
@@ -214,7 +324,7 @@ export default function ContentPreview({
               <Brain className="mx-auto h-12 w-12 text-gray-400 mb-4" />
               <p className="text-gray-500 mb-4">No flashcards generated yet</p>
               <p className="text-sm text-gray-400">
-                Click "Generate Flashcards" above to create cards from the extracted text
+                Click "Generate Flashcards" above or import JSON from ChatGPT
               </p>
             </div>
           ) : (

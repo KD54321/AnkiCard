@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Anki Flashcard Generator for ChatGPT",
-  "version": "1.0.0",
-  "description": "Automatically generate Anki flashcards from PDFs using ChatGPT",
+  "version": "1.0.1",
+  "description": "Generate Anki flashcards using ChatGPT",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",

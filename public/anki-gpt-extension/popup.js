@@ -1,9 +1,8 @@
-// popup.js - Extension popup logic
-
 document.addEventListener('DOMContentLoaded', () => {
   const textInput = document.getElementById('textInput');
   const cardFormat = document.getElementById('cardFormat');
   const generateBtn = document.getElementById('generateBtn');
+  const copyBtn = document.getElementById('copyBtn');
   const clearBtn = document.getElementById('clearBtn');
   const charCount = document.getElementById('charCount');
   const statusDiv = document.getElementById('status');
@@ -19,10 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Update character count
   textInput.addEventListener('input', () => {
     updateCharCount();
-    // Auto-save
     chrome.storage.local.set({ pdfText: textInput.value });
   });
 
@@ -32,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateCharCount() {
     const count = textInput.value.length;
-    charCount.textContent = `${count} characters`;
+    charCount.textContent = `${count.toLocaleString()} characters`;
   }
 
   function updateStatus(icon, text, type = 'info') {
@@ -43,7 +40,21 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
   }
 
-  // Generate flashcards
+  // Copy prompt only
+  copyBtn.addEventListener('click', () => {
+    const text = textInput.value.trim();
+    if (!text) {
+      updateStatus('⚠️', 'Please enter some text first', 'warning');
+      return;
+    }
+
+    const prompt = generatePrompt(text, cardFormat.value);
+    navigator.clipboard.writeText(prompt).then(() => {
+      updateStatus('✅', 'Prompt copied! Open ChatGPT and paste it', 'success');
+    });
+  });
+
+  // Generate in ChatGPT
   generateBtn.addEventListener('click', async () => {
     const text = textInput.value.trim();
     
@@ -53,40 +64,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const format = cardFormat.value;
-    
-    // Generate the prompt
     const prompt = generatePrompt(text, format);
     
-    // Save to storage for content script
     await chrome.storage.local.set({ 
       promptToSend: prompt,
       pendingGeneration: true
     });
 
-    updateStatus('✨', 'Opening ChatGPT...', 'success');
+    updateStatus('✨', 'Opening ChatGPT...', 'info');
 
-    // Open ChatGPT
     chrome.tabs.create({ 
       url: 'https://chatgpt.com',
       active: true
     }, (tab) => {
-      // Wait a bit for the page to load, then inject
       setTimeout(() => {
         chrome.tabs.sendMessage(tab.id, {
           action: 'fillPrompt',
           prompt: prompt
         }, (response) => {
           if (chrome.runtime.lastError) {
-            console.log('Tab not ready yet, will inject on load');
-          } else if (response && response.success) {
-            updateStatus('✅', 'Prompt injected! Wait for response...', 'success');
+            console.log('Tab not ready, will inject on load');
           }
         });
-      }, 2000);
+      }, 2500);
     });
   });
 
-  // Clear button
   clearBtn.addEventListener('click', () => {
     textInput.value = '';
     updateCharCount();
@@ -97,27 +100,26 @@ document.addEventListener('DOMContentLoaded', () => {
   function generatePrompt(text, format) {
     const formatInstructions = format === 'cloze' 
       ? 'Create cloze deletion cards using {{c1::text}} format for key terms.'
-      : 'Create question-answer flashcards with clear, specific questions that test understanding.';
+      : 'Create question-answer flashcards with clear, specific questions.';
 
-    return `I need you to create Anki flashcards from my study notes. Please follow these instructions exactly:
+    return `I need you to create Anki flashcards from my study notes. Return ONLY valid JSON, no other text.
 
 FORMAT: ${format === 'cloze' ? 'Cloze Deletion' : 'Basic Question-Answer'}
 ${formatInstructions}
 
 QUALITY REQUIREMENTS:
-- Test understanding, not just memorization
-- Ask "Why?", "How?", "Compare", "Explain" (for basic cards)
+- Test understanding, not memorization
 - One concept per card
 - Clear and unambiguous
 - Include difficulty level (easy/medium/hard)
 - Add relevant tags for organization
 
-OUTPUT FORMAT - Return ONLY valid JSON, no other text:
+OUTPUT FORMAT - Return ONLY this JSON structure:
 {
   "cards": [
     {
-      "front": "Question or cloze statement",
-      "back": "Answer with context",
+      "front": "${format === 'cloze' ? 'Statement with {{c1::hidden text}}' : 'Clear question'}",
+      "back": "${format === 'cloze' ? 'The hidden answer' : 'Detailed answer with context'}",
       "tags": ["topic1", "topic2"],
       "difficulty": "medium"
     }
@@ -128,8 +130,8 @@ OUTPUT FORMAT - Return ONLY valid JSON, no other text:
 }
 
 MY STUDY NOTES:
-${text}
+${text.substring(0, 4000)}
 
-Please generate 15-20 high-quality flashcards now. Return ONLY the JSON, nothing else.`;
+Generate 15-20 high-quality flashcards. Return ONLY valid JSON, no markdown, no explanations.`;
   }
 });

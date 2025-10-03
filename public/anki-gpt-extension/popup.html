@@ -9,7 +9,7 @@
   <div class="container">
     <div class="header">
       <h1>🎴 Anki Flashcard Generator</h1>
-      <p class="subtitle">Powered by ChatGPT</p>
+      <p class="subtitle">Step 1: Prepare your prompt</p>
     </div>
 
     <div class="status" id="status">
@@ -44,25 +44,32 @@ Hyperopia: Farsightedness where near objects are blurry"
         <span class="btn-icon">✨</span>
         Generate in ChatGPT
       </button>
+      <button id="copyBtn" class="btn btn-secondary-alt">
+        📋 Copy Prompt
+      </button>
+    </div>
+
+    <div class="button-group">
       <button id="clearBtn" class="btn btn-secondary">
         Clear
       </button>
     </div>
 
     <div class="instructions">
-      <h3>📋 How it works:</h3>
+      <h3>📋 How to use:</h3>
       <ol>
-        <li>Paste your PDF text above</li>
-        <li>Click "Generate in ChatGPT"</li>
-        <li>Extension opens ChatGPT and auto-fills the prompt</li>
-        <li>Wait for ChatGPT to generate flashcards</li>
-        <li>Copy the JSON response back to your app</li>
+        <li><strong>From your webapp:</strong> Copy extracted PDF text</li>
+        <li><strong>Paste here</strong> and select card format</li>
+        <li><strong>Click "Generate in ChatGPT"</strong> - opens ChatGPT with prompt</li>
+        <li><strong>Wait for response</strong> - ChatGPT generates JSON</li>
+        <li><strong>Copy the JSON</strong> from ChatGPT</li>
+        <li><strong>Go back to webapp</strong> and import the JSON</li>
       </ol>
     </div>
 
     <div class="info-box">
-      <p><strong>💡 Tip:</strong> Make sure you're logged into ChatGPT first!</p>
-      <p><strong>🔒 Privacy:</strong> Your text stays in your browser. Nothing is sent to our servers.</p>
+      <p><strong>💡 Tip:</strong> Make sure you're logged into ChatGPT!</p>
+      <p><strong>🔒 Privacy:</strong> All processing happens locally</p>
     </div>
   </div>
 
