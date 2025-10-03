@@ -431,7 +431,7 @@ function startResponseMonitoring() {
   
   let generationComplete = false;
   let stableChecks = 0;
-  const requiredStableChecks = 1;
+  const requiredStableChecks = 3;
   
   // Create MutationObserver
   responseObserver = new MutationObserver((mutations) => {
