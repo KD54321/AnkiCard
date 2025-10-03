@@ -25,7 +25,7 @@ export default function CardFormatOptions({
   deckName = 'Generated Deck',
   extractedText = ''
 }: CardFormatOptionsProps) {
-  const [cardCount, setCardCount] = React.useState([10]);
+  const [cardCount, setCardCount] = React.useState([20]);
   const [includeTags, setIncludeTags] = React.useState(true);
   const [isExporting, setIsExporting] = React.useState(false);
   const [exportStatus, setExportStatus] = React.useState<{

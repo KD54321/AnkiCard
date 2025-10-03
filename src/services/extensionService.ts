@@ -125,7 +125,7 @@ export class ExtensionService {
       console.log('Prompt sent to ChatGPT, waiting for response...');
 
       // Poll for response
-      return await this.pollForResponse(60000); // 60 second timeout
+      return await this.pollForResponse(600000); // 600 second timeout
 
     } catch (error) {
       console.error('Extension generation error:', error);

@@ -1,8 +1,144 @@
 console.log('Anki Flashcard Generator: Content script loaded');
 
 let isWaitingForResponse = false;
-let responseCheckInterval = null;
+let responseObserver = null;
 let lastMessageCount = 0;
+
+// Create debug panel
+function createDebugPanel() {
+  if (document.getElementById('anki-debug-panel')) return;
+  
+  const panel = document.createElement('div');
+  panel.id = 'anki-debug-panel';
+  panel.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: white;
+    border: 2px solid #667eea;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 999998;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 12px;
+    max-width: 250px;
+  `;
+  
+  panel.innerHTML = `
+    <div style="font-weight: 600; margin-bottom: 10px; color: #667eea;">
+      🎴 Anki Card Generator
+    </div>
+    <button id="anki-extract-now" style="
+      width: 100%;
+      padding: 8px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 500;
+      margin-bottom: 5px;
+    ">Extract Response Now</button>
+    <button id="anki-check-storage" style="
+      width: 100%;
+      padding: 8px;
+      background: #10b981;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 500;
+      margin-bottom: 5px;
+    ">Check Storage</button>
+    <button id="anki-resubmit" style="
+      width: 100%;
+      padding: 8px;
+      background: #f59e0b;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 500;
+    ">Retry Submit</button>
+    <div id="anki-status" style="
+      margin-top: 10px;
+      padding: 8px;
+      background: #f3f4f6;
+      border-radius: 5px;
+      font-size: 11px;
+    ">Ready</div>
+  `;
+  
+  document.body.appendChild(panel);
+  
+  document.getElementById('anki-extract-now').addEventListener('click', manualExtract);
+  document.getElementById('anki-check-storage').addEventListener('click', checkStorageDebug);
+  document.getElementById('anki-resubmit').addEventListener('click', retrySubmit);
+}
+
+function updateDebugStatus(message) {
+  const status = document.getElementById('anki-status');
+  if (status) {
+    status.textContent = message;
+    console.log('🎯 Debug status:', message);
+  }
+}
+
+function manualExtract() {
+  console.log('🔧 Manual extraction triggered');
+  updateDebugStatus('Extracting...');
+  
+  const response = extractChatGPTResponse();
+  
+  if (response.success && response.json) {
+    console.log('✅ Manual extraction successful!');
+    
+    chrome.runtime.sendMessage({
+      action: 'responseExtracted',
+      data: response.json
+    });
+    
+    chrome.storage.local.set({
+      latestResponse: response.json,
+      responseReady: true,
+      timestamp: Date.now()
+    });
+    
+    updateDebugStatus('✅ Extracted! Check webapp');
+    showNotification('✅ Response extracted manually!', 'success');
+  } else {
+    console.log('❌ Manual extraction failed:', response.error);
+    updateDebugStatus('❌ ' + response.error);
+    showNotification('❌ No valid JSON found', 'error');
+  }
+}
+
+function checkStorageDebug() {
+  chrome.storage.local.get(['latestResponse', 'responseReady', 'promptToSend'], (result) => {
+    console.log('📦 Storage check:', {
+      hasResponse: !!result.latestResponse,
+      isReady: result.responseReady,
+      hasPrompt: !!result.promptToSend,
+      responseLength: result.latestResponse?.length || 0
+    });
+    if (result.latestResponse) {
+      updateDebugStatus(`✅ Has data (${result.latestResponse.length} chars)`);
+    } else {
+      updateDebugStatus('❌ No data in storage');
+    }
+  });
+}
+
+function retrySubmit() {
+  updateDebugStatus('Retrying submit...');
+  const input = findChatGPTInput();
+  if (input) {
+    submitPrompt(input);
+  } else {
+    updateDebugStatus('❌ Input not found');
+  }
+}
 
 // Listen for messages from background/popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -33,6 +169,9 @@ chrome.storage.local.get(['pendingGeneration', 'promptToSend', 'autoSubmit'], (r
       setTimeout(() => {
         fillChatGPTPrompt(result.promptToSend, result.autoSubmit || false);
         chrome.storage.local.remove(['pendingGeneration']);
+        
+        // Show debug panel after a delay
+        setTimeout(createDebugPanel, 3000);
       }, 2000);
     };
     
@@ -41,12 +180,13 @@ chrome.storage.local.get(['pendingGeneration', 'promptToSend', 'autoSubmit'], (r
     } else {
       window.addEventListener('load', waitAndFill);
     }
+  } else {
+    // Show debug panel on any ChatGPT page
+    setTimeout(createDebugPanel, 2000);
   }
 });
 
-function fillChatGPTPrompt(prompt, autoSubmit = false) {
-  console.log('Filling ChatGPT prompt... Auto-submit:', autoSubmit);
-  
+function findChatGPTInput() {
   const selectors = [
     '#prompt-textarea',
     'textarea[placeholder*="Message"]',
@@ -55,23 +195,28 @@ function fillChatGPTPrompt(prompt, autoSubmit = false) {
     'div[contenteditable="true"]'
   ];
 
-  let inputElement = null;
-  
   for (const selector of selectors) {
     const elements = document.querySelectorAll(selector);
     for (const el of elements) {
       const rect = el.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        inputElement = el;
-        console.log(`Found input: ${selector}`);
-        break;
+        console.log(`✅ Found input: ${selector}`);
+        return el;
       }
     }
-    if (inputElement) break;
   }
+  return null;
+}
+
+function fillChatGPTPrompt(prompt, autoSubmit = false) {
+  console.log('📝 Filling ChatGPT prompt... Auto-submit:', autoSubmit);
+  updateDebugStatus('Filling prompt...');
+  
+  const inputElement = findChatGPTInput();
 
   if (!inputElement) {
-    console.error('Could not find ChatGPT input');
+    console.error('❌ Could not find ChatGPT input');
+    updateDebugStatus('❌ Input not found');
     copyToClipboard(prompt);
     showNotification('📋 Prompt copied! Paste manually', 'warning');
     return;
@@ -105,51 +250,113 @@ function fillChatGPTPrompt(prompt, autoSubmit = false) {
       inputElement.selectionEnd = prompt.length;
     }
 
-    console.log('Prompt filled successfully');
+    console.log('✅ Prompt filled successfully');
+    updateDebugStatus('Prompt filled');
 
     if (autoSubmit) {
-      // Wait a bit for ChatGPT to process the input
       setTimeout(() => {
         submitPrompt(inputElement);
-      }, 500);
+      }, 800);
     } else {
       showNotification('✅ Prompt filled! Press Enter to send', 'success');
     }
 
   } catch (error) {
-    console.error('Error filling prompt:', error);
+    console.error('❌ Error filling prompt:', error);
+    updateDebugStatus('❌ Fill failed');
     copyToClipboard(prompt);
     showNotification('📋 Error - Copied to clipboard', 'warning');
   }
 }
 
 function submitPrompt(inputElement) {
-  console.log('Attempting to submit prompt...');
+  console.log('🚀 Attempting to submit prompt...');
+  updateDebugStatus('Submitting...');
   
   try {
-    // Method 1: Find and click the send button
+    // Find the form first (more reliable)
+    const form = inputElement.closest('form');
+    
+    if (form) {
+      console.log('📋 Found form element, checking for send button...');
+      
+      // Look for send button within the form
+      const sendButton = form.querySelector('button[data-testid="send-button"]') ||
+                        form.querySelector('button[data-testid="fruitjuice-send-button"]') ||
+                        form.querySelector('button[type="submit"]') ||
+                        form.querySelector('button:not([disabled])');
+      
+      if (sendButton && !sendButton.disabled) {
+        console.log('✅ Found send button in form');
+        console.log('Button details:', {
+          tagName: sendButton.tagName,
+          type: sendButton.type,
+          disabled: sendButton.disabled,
+          testId: sendButton.getAttribute('data-testid'),
+          className: sendButton.className
+        });
+        
+        // Try multiple click methods
+        try {
+          sendButton.click();
+          console.log('✅ Button clicked successfully');
+        } catch (e) {
+          console.log('⚠️ Direct click failed, trying MouseEvent...', e);
+          sendButton.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+        }
+        
+        updateDebugStatus('Submitted! Waiting...');
+        showNotification('🚀 Sent to ChatGPT!', 'info');
+        
+        setTimeout(() => {
+          startResponseMonitoring();
+        }, 1500);
+        return;
+      } else {
+        console.log('⚠️ Send button not found or disabled in form');
+      }
+    }
+
+    // Fallback: Search entire page for send button
+    console.log('🔍 Searching page for send button...');
     const sendButtonSelectors = [
       'button[data-testid="send-button"]',
       'button[data-testid="fruitjuice-send-button"]',
-      'button svg[class*="icon"]', // SVG icon in button
       'button[aria-label*="Send"]',
-      'button[type="submit"]',
-      'form button[class*="absolute"]' // Often the send button has absolute positioning
+      'button[type="submit"]'
     ];
 
     let sendButton = null;
     
     for (const selector of sendButtonSelectors) {
       const buttons = document.querySelectorAll(selector);
+      console.log(`Checking selector "${selector}": found ${buttons.length} elements`);
+      
       for (const btn of buttons) {
-        // Check if button is visible and in the input area
+        if (btn.tagName !== 'BUTTON') continue;
+        
         const rect = btn.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          // Check if it's near the input (likely the send button)
+        const isVisible = rect.width > 0 && rect.height > 0;
+        const isDisabled = btn.disabled || btn.hasAttribute('disabled');
+        
+        console.log('Button check:', {
+          selector,
+          visible: isVisible,
+          disabled: isDisabled,
+          ariaLabel: btn.getAttribute('aria-label')
+        });
+        
+        if (isVisible && !isDisabled) {
           const inputRect = inputElement.getBoundingClientRect();
-          if (Math.abs(rect.top - inputRect.top) < 100) {
+          const distance = Math.abs(rect.top - inputRect.top);
+          
+          if (distance < 150) {
             sendButton = btn;
-            console.log(`Found send button: ${selector}`);
+            console.log(`✅ Found send button: ${selector}, distance: ${distance}px`);
             break;
           }
         }
@@ -157,44 +364,45 @@ function submitPrompt(inputElement) {
       if (sendButton) break;
     }
 
-    if (sendButton && !sendButton.disabled) {
-      console.log('Clicking send button...');
+    if (sendButton) {
+      console.log('🎯 Clicking send button...');
       sendButton.click();
-      showNotification('🚀 Sending to ChatGPT...', 'info');
+      updateDebugStatus('Submitted! Waiting...');
+      showNotification('🚀 Sent to ChatGPT!', 'info');
       
-      // Start monitoring for response
       setTimeout(() => {
         startResponseMonitoring();
-      }, 1000);
+      }, 1500);
       return;
     }
 
-    // Method 2: Simulate Enter key press
-    console.log('Send button not found, trying Enter key...');
+    // Last resort: Simulate Enter key
+    console.log('⌨️ No button found, simulating Enter key...');
     
-    const enterEvent = new KeyboardEvent('keydown', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true,
-      composed: true
+    ['keydown', 'keypress', 'keyup'].forEach(eventType => {
+      inputElement.dispatchEvent(new KeyboardEvent(eventType, {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      }));
     });
     
-    inputElement.dispatchEvent(enterEvent);
-    showNotification('🚀 Sending to ChatGPT...', 'info');
+    updateDebugStatus('Enter pressed...');
+    showNotification('⌨️ Enter key sent...', 'info');
     
-    // Start monitoring
     setTimeout(() => {
       startResponseMonitoring();
-    }, 1000);
+    }, 1500);
 
   } catch (error) {
-    console.error('Error submitting prompt:', error);
+    console.error('❌ Error submitting prompt:', error);
+    updateDebugStatus('❌ Submit failed');
     showNotification('⚠️ Auto-submit failed. Press Enter manually', 'warning');
     
-    // Still start monitoring in case user submits manually
     setTimeout(() => {
       startResponseMonitoring();
     }, 2000);
@@ -202,155 +410,246 @@ function submitPrompt(inputElement) {
 }
 
 function startResponseMonitoring() {
-  console.log('Starting response monitoring...');
+  console.log('🔍 Starting response monitoring with MutationObserver...');
+  updateDebugStatus('Monitoring...');
   showNotification('⏳ Waiting for ChatGPT response...', 'info');
   
-  // Count current messages to detect new ones
+  // Stop any existing observer
+  if (responseObserver) {
+    responseObserver.disconnect();
+  }
+  
+  // Count current messages
   const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
   lastMessageCount = messages.length;
-  
-  let attemptCount = 0;
-  const maxAttempts = 120; // 2 minutes timeout
+  console.log(`📊 Initial message count: ${lastMessageCount}`);
   
   isWaitingForResponse = true;
   
-  responseCheckInterval = setInterval(() => {
-    attemptCount++;
-    
-    if (attemptCount > maxAttempts) {
-      console.log('Response monitoring timeout');
-      clearInterval(responseCheckInterval);
-      isWaitingForResponse = false;
-      showNotification('⏱️ Timeout - Please try again', 'warning');
-      chrome.storage.local.set({ waitingForResponse: false });
-      return;
-    }
-    
-    // Check if a new message appeared
+  // Find the container to observe
+  const container = document.querySelector('main') || document.body;
+  
+  let generationComplete = false;
+  let stableChecks = 0;
+  const requiredStableChecks = 1;
+  
+  // Create MutationObserver
+  responseObserver = new MutationObserver((mutations) => {
+    // Check if new message appeared
     const currentMessages = document.querySelectorAll('[data-message-author-role="assistant"]');
     
-    if (currentMessages.length > lastMessageCount) {
-      console.log('New response detected!');
-      
-      // Wait a bit for the response to fully render
-      setTimeout(() => {
-        const response = extractChatGPTResponse();
-        
-        if (response.success && response.json) {
-          console.log('Valid JSON response found!');
-          clearInterval(responseCheckInterval);
-          isWaitingForResponse = false;
-          
-          // Send to background
-          chrome.runtime.sendMessage({
-            action: 'responseExtracted',
-            data: response.json
-          });
-          
-          // Store for webapp
-          chrome.storage.local.set({
-            latestResponse: response.json,
-            waitingForResponse: false,
-            responseReady: true,
-            timestamp: Date.now()
-          });
-          
-          showNotification('✅ Cards generated! Returning to webapp...', 'success');
-          
-          // Optional: Show confirmation before closing
-          setTimeout(() => {
-            showNotification('💚 Success! You can close this tab', 'success');
-          }, 2000);
-        } else {
-          // Response exists but no valid JSON yet, keep checking
-          console.log('Response exists but no valid JSON yet...');
-        }
-      }, 2000); // Wait 2 seconds for full render
+    if (currentMessages.length > lastMessageCount && !generationComplete) {
+      console.log('🎉 New response detected via MutationObserver!');
+      updateDebugStatus('Response detected!');
+      lastMessageCount = currentMessages.length;
+      showNotification('📝 Response started, waiting...', 'info');
     }
-  }, 1000);
+    
+    // If we've detected a message, check if generation is complete
+    if (currentMessages.length > 0 && currentMessages.length >= lastMessageCount) {
+      const latestMessage = currentMessages[currentMessages.length - 1];
+      
+      const isGenerating = 
+        latestMessage.querySelector('[data-message-id]')?.classList.contains('result-streaming') ||
+        document.querySelector('[class*="streaming"]') !== null ||
+        document.querySelector('button[aria-label*="Stop"]') !== null ||
+        document.querySelector('button[aria-label*="Stop generating"]') !== null;
+      
+      if (!isGenerating && !generationComplete) {
+        stableChecks++;
+        console.log(`✅ Generation appears complete (stable check ${stableChecks}/${requiredStableChecks})`);
+        
+        if (stableChecks >= requiredStableChecks) {
+          console.log('✅ Response is stable, extracting JSON...');
+          generationComplete = true;
+          
+          setTimeout(() => {
+            handleResponseExtraction();
+          }, 1000);
+        }
+      } else if (isGenerating) {
+        if (stableChecks > 0) {
+          console.log('⏳ Still generating, resetting stable checks...');
+        }
+        stableChecks = 0;
+      }
+    }
+  });
+  
+  // Start observing
+  responseObserver.observe(container, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'data-message-author-role']
+  });
+  
+  console.log('✅ MutationObserver active');
+  
+  // Fallback timeout
+  setTimeout(() => {
+    if (isWaitingForResponse) {
+      console.log('⏱️ Timeout reached, stopping observer');
+      responseObserver.disconnect();
+      isWaitingForResponse = false;
+      updateDebugStatus('⏱️ Timeout - try manual');
+      showNotification('⏱️ Timeout - Use manual extract', 'warning');
+    }
+  }, 180000); // 3 minutes
+}
+
+function handleResponseExtraction() {
+  const response = extractChatGPTResponse();
+  
+  if (response.success && response.json) {
+    console.log('✅ Valid JSON response found!');
+    console.log('JSON preview:', response.json.substring(0, 200));
+    
+    responseObserver.disconnect();
+    isWaitingForResponse = false;
+    
+    // Send to background script
+    console.log('📤 Sending response to background script...');
+    chrome.runtime.sendMessage({
+      action: 'responseExtracted',
+      data: response.json
+    }, (bgResponse) => {
+      if (chrome.runtime.lastError) {
+        console.error('❌ Error sending to background:', chrome.runtime.lastError);
+      } else {
+        console.log('✅ Background script confirmed:', bgResponse);
+      }
+    });
+    
+    // Store locally
+    chrome.storage.local.set({
+      latestResponse: response.json,
+      waitingForResponse: false,
+      responseReady: true,
+      timestamp: Date.now()
+    }, () => {
+      console.log('✅ Response stored');
+      
+      chrome.storage.local.get(['latestResponse', 'responseReady'], (result) => {
+        console.log('✅ Verification:', {
+          hasResponse: !!result.latestResponse,
+          isReady: result.responseReady,
+          length: result.latestResponse?.length || 0
+        });
+      });
+    });
+    
+    updateDebugStatus('✅ Extracted!');
+    showNotification('✅ Cards generated! Check webapp', 'success');
+    
+    setTimeout(() => {
+      showNotification('💚 Success! You can close this tab', 'success');
+    }, 2000);
+  } else {
+    console.log('⚠️ Response complete but no valid JSON');
+    console.log('Error:', response.error);
+    updateDebugStatus('❌ No JSON found');
+  }
 }
 
 function extractChatGPTResponse() {
   try {
-    // Find the latest assistant message
+    console.log('🔍 Extracting ChatGPT response...');
+    
     const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
     
     if (messages.length === 0) {
+      console.log('❌ No assistant messages found');
       return { success: false, error: 'No response yet' };
     }
     
     const latestMessage = messages[messages.length - 1];
+    console.log('📝 Found latest message');
     
-    // Check if message is still being generated (has streaming indicator)
-    const isGenerating = latestMessage.querySelector('[data-message-id]')?.classList.contains('result-streaming') ||
-                        latestMessage.textContent?.includes('...') ||
-                        document.querySelector('[class*="streaming"]');
-    
-    if (isGenerating) {
-      console.log('Response still generating...');
-      return { success: false, error: 'Still generating' };
-    }
-    
-    // Look for code blocks first
+    // Look for code blocks
     const codeBlocks = latestMessage.querySelectorAll('code, pre');
+    console.log(`Found ${codeBlocks.length} code blocks`);
     
-    for (const block of codeBlocks) {
+    // Try each code block, don't stop at first failure
+    for (let i = 0; i < codeBlocks.length; i++) {
+      const block = codeBlocks[i];
       let text = block.textContent || '';
       
-      // Try to find JSON
-      if (text.includes('"cards"') && text.includes('[')) {
-        try {
-          // Clean markdown formatting
-          text = text
-            .replace(/```json\n?/gi, '')
-            .replace(/```javascript\n?/gi, '')
-            .replace(/```\n?/g, '')
-            .trim();
-          
-          // Try to parse
-          const parsed = JSON.parse(text);
-          
-          if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
-            console.log(`Found valid JSON with ${parsed.cards.length} cards`);
-            return { success: true, json: text };
-          }
-        } catch (e) {
-          console.log('Failed to parse code block:', e);
-        }
+      if (text.length < 50) {
+        console.log(`Skipping code block ${i + 1} (too short: ${text.length} chars)`);
+        continue;
       }
-    }
-    
-    // Fallback: search in plain text
-    const textContent = latestMessage.textContent || '';
-    
-    // Try to extract JSON from text
-    const jsonMatch = textContent.match(/\{[\s\S]*?"cards"[\s\S]*?\[[\s\S]*?\][\s\S]*?\}/);
-    
-    if (jsonMatch) {
+      
+      console.log(`Checking code block ${i + 1} (${text.length} chars)`);
+      
+      // Must contain both "cards" and an array
+      if (!text.includes('"cards"') || !text.includes('[')) {
+        console.log(`Skipping code block ${i + 1} (no cards array)`);
+        continue;
+      }
+      
       try {
-        const parsed = JSON.parse(jsonMatch[0]);
+        // Aggressive cleaning
+        text = text
+          .replace(/^jsonCopy\s*/gi, '') // Remove "jsonCopy" prefix
+          .replace(/^json\s*/gi, '')      // Remove "json" prefix
+          .replace(/Copy\s*/gi, '')       // Remove "Copy" prefix
+          .replace(/```json\s*/gi, '')
+          .replace(/```javascript\s*/gi, '')
+          .replace(/```\s*/g, '')
+          .replace(/^[\s\n]+/, '')
+          .replace(/[\s\n]+$/, '')
+          .trim();
+        
+        // Additional check: text must start with {
+        if (!text.startsWith('{')) {
+          console.log(`Skipping code block ${i + 1} (doesn't start with {)`);
+          console.log('Text preview:', text.substring(0, 50));
+          continue;
+        }
+        
+        const parsed = JSON.parse(text);
+        
+        // Validate structure
         if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
-          console.log('Found valid JSON in text');
-          return { success: true, json: jsonMatch[0] };
+          const validCards = parsed.cards.filter(card => 
+            card.front && card.back && 
+            typeof card.front === 'string' && 
+            typeof card.back === 'string'
+          );
+          
+          if (validCards.length > 0) {
+            console.log(`✅ Found ${validCards.length} valid cards in block ${i + 1}`);
+            
+            if (validCards.length !== parsed.cards.length) {
+              console.log(`⚠️ Filtered out ${parsed.cards.length - validCards.length} invalid cards`);
+              parsed.cards = validCards;
+            }
+            
+            return { success: true, json: JSON.stringify(parsed) };
+          } else {
+            console.log(`⚠️ Block ${i + 1} has cards array but no valid cards`);
+          }
         }
       } catch (e) {
-        console.log('Failed to parse text JSON:', e);
+        console.log(`❌ Parse failed for block ${i + 1}:`, e.message);
+        console.log('Problematic text start:', text.substring(0, 100));
+        // Continue to next block instead of giving up
+        continue;
       }
     }
     
-    console.log('No valid JSON found in response');
+    console.log('❌ No valid JSON found in any code block');
     return { success: false, error: 'No valid JSON found' };
     
   } catch (error) {
-    console.error('Error extracting response:', error);
+    console.error('❌ Error:', error);
     return { success: false, error: error.message };
   }
 }
 
 function copyToClipboard(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    console.log('Copied to clipboard');
-  }).catch(err => {
+  navigator.clipboard.writeText(text).catch(err => {
     console.error('Failed to copy:', err);
   });
 }
@@ -369,7 +668,7 @@ function showNotification(message, type = 'info') {
     background: ${type === 'success' ? '#10b981' : type === 'warning' ? '#f59e0b' : '#3b82f6'};
     color: white;
     border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
     z-index: 999999;
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 14px;

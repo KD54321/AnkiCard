@@ -18,16 +18,33 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
 
   // Handle request for latest response
   if (request.action === 'getLatestResponse') {
-    chrome.storage.local.get(['latestResponse', 'responseReady'], (result) => {
+    console.log('📥 Webapp requesting latest response...');
+    
+    chrome.storage.local.get(['latestResponse', 'responseReady', 'timestamp'], (result) => {
+      console.log('Storage contents:', {
+        hasResponse: !!result.latestResponse,
+        isReady: result.responseReady,
+        timestamp: result.timestamp,
+        dataPreview: result.latestResponse ? result.latestResponse.substring(0, 100) : 'none'
+      });
+      
       if (result.responseReady && result.latestResponse) {
+        console.log('✅ Sending response back to webapp');
         sendResponse({ 
           success: true, 
-          latestResponse: result.latestResponse 
+          latestResponse: result.latestResponse,
+          timestamp: result.timestamp
         });
-        // Clear the flag but keep the data for a bit
+        
+        // Clear the ready flag but keep data for potential retry
         chrome.storage.local.set({ responseReady: false });
       } else {
-        sendResponse({ success: false, waiting: true });
+        console.log('⏳ No response ready yet, webapp should continue polling');
+        sendResponse({ 
+          success: false, 
+          waiting: true,
+          message: 'Response not ready yet'
+        });
       }
     });
     return true;
