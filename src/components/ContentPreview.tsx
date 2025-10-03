@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Alert, AlertDescription } from './ui/alert';
 import { Loader2, FileText, Brain, Zap, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { FlashCard, AIService } from '../services/aiService';
+import { ExtensionService } from '../services/extensionService';
 
 interface ContentPreviewProps {
   extractedContent?: { text: string; pageCount: number; title?: string };
@@ -18,6 +19,8 @@ export default function ContentPreview({
   onContentProcessed = () => {},
   cardFormat = 'basic'
 }: ContentPreviewProps) {
+  const [extensionAvailable, setExtensionAvailable] = useState(false);
+  const [isGeneratingWithExtension, setIsGeneratingWithExtension] = useState(false);
   const [editedText, setEditedText] = useState('');
   const [flashcards, setFlashcards] = useState<FlashCard[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -26,6 +29,58 @@ export default function ContentPreview({
     message: string;
   } | null>(null);
   
+
+  useEffect(() => {
+  ExtensionService.isExtensionInstalled().then(setExtensionAvailable);
+}, []);
+
+const handleGenerateWithChatGPT = async () => {
+  if (!editedText || editedText.trim().length < 10) {
+    setStatusMessage({
+      type: 'error',
+      message: 'Please provide more text content.'
+    });
+    return;
+  }
+ setIsGeneratingWithExtension(true);
+  setStatusMessage({
+    type: 'info',
+    message: 'Sending to ChatGPT via extension... This will open a new tab.'
+  });
+
+  try {
+    const result = await ExtensionService.generateWithChatGPT(editedText, cardFormat);
+
+    if (result.success && result.cards) {
+      const importedCards: FlashCard[] = result.cards.map((card: any, index: number) => ({
+        id: `chatgpt-${Date.now()}-${index}`,
+        front: card.front || '',
+        back: card.back || '',
+        type: cardFormat,
+        tags: Array.isArray(card.tags) ? card.tags : [],
+        difficulty: card.difficulty || 'medium'
+      }));
+
+      setFlashcards(importedCards);
+      onContentProcessed(importedCards);
+      
+      setStatusMessage({
+        type: 'success',
+        message: `Generated ${importedCards.length} cards via ChatGPT! Ready to export.`
+      });
+    } else {
+      throw new Error(result.error || 'Failed to generate cards');
+    }
+  } catch (error) {
+    console.error('ChatGPT generation error:', error);
+    setStatusMessage({
+      type: 'error',
+      message: error instanceof Error ? error.message : 'Failed to generate via ChatGPT. Try manual import instead.'
+    });
+  } finally {
+    setIsGeneratingWithExtension(false);
+  }
+};
   // New state for JSON import
   const [jsonInput, setJsonInput] = useState('');
   const [showJsonImport, setShowJsonImport] = useState(false);
@@ -196,6 +251,22 @@ export default function ContentPreview({
             >
               {showJsonImport ? 'Hide' : 'Show'} Import
             </Button>
+                        {/* Chrome Extension + ChatGPT Button */}
+            {extensionAvailable && (
+  <Button 
+    onClick={handleGenerateWithChatGPT} 
+    disabled={isGeneratingWithExtension}
+    size="lg"
+    variant="outline"
+    className="border-blue-500 text-blue-600 hover:bg-blue-50"
+  >
+    {isGeneratingWithExtension ? (
+      <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Waiting for ChatGPT...</>
+    ) : (
+      <><Zap className="h-4 w-4 mr-2" /> Generate with ChatGPT (Auto)</>
+    )}
+  </Button>
+)}
           </CardTitle>
         </CardHeader>
         {showJsonImport && (
