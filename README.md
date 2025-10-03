@@ -1,30 +1,35 @@
-# React + TypeScript + Vite
+# AnkiCard Generator
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AnkiCard Generator is a tool that helps you convert study notes into Anki flashcards.
+It supports parsing text, extracting key concepts, and exporting structured cards in Anki-compatible format.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+🔹 Convert notes into Q/A flashcards automatically
 
-## Expanding the ESLint configuration
+🔹 Export to JSON or send directly to AnkiConnect
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+🔹 Add tags, images, and difficulty levels
 
-- Configure the top-level `parserOptions` property like this:
+🔹 Designed for students & professionals preparing for exams
 
-```js
-export default {
-  // other rules...
-  parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
-    tsconfigRootDir: __dirname,
-  },
-}
-```
+## Prereq
+You will need to have *Anki Desktop* with *AnkiConnect* Add-on installed on your machine.
+## Installation
+git clone https://github.com/KD54321/AnkiCard.git
 
-- Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
-- Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
+### Install dependencies
+npm install
+
+### Build the project
+npm run build
+
+## Project Structure
+ankicard-generator/     
+│── anki-extension/     # Chrome Extension that opens Open AI for better question generation
+│── src/
+│   ├── components/     # Core components (CardFormat, ContentPreview, PDFUploader)
+│   ├── services/       # Core services (aiService, ankiService, extensionService, parserService)
+│   ├── ui.ts           # UI Components
+│── package.json
+│── README.md
