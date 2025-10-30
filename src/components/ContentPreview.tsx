@@ -355,18 +355,21 @@ const handleGenerateWithChatGPT = async () => {
             className="min-h-[400px] font-mono text-sm"
             placeholder="Edit the extracted text here before processing..."
           />
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+    <div className="mt-4 p-3 bg-blue-50 rounded-lg">
             <p className="text-xs text-blue-900 font-medium mb-2">💡 Tips for better results:</p>
             <ul className="text-xs text-blue-800 space-y-1 list-disc list-inside">
               {hasApiKey ? (
                 <>
                   <li><strong>AI Mode:</strong> Intelligent extraction using OpenAI, understands context and medical terms</li>
-                  <li>AI processing may take a few seconds depending on content length</li>
+                  <li>Large documents ({editedText.length > 10000 ? 'like this one' : 'over 10,000 characters'}) are processed in chunks automatically</li>
+                  <li>AI processing may take 10-30 seconds depending on content length</li>
+                  <li>French and English medical terminology are both supported</li>
                 </>
               ) : (
                 <>
-                  <li><strong>Mock Mode:</strong> Sample flashcards generated from key concepts</li>
-                  <li>Add OpenAI API key in Settings for AI-powered extraction</li>
+                  <li><strong>Pattern Mode:</strong> Flashcards generated from document structure and key concepts</li>
+                  <li>Add OpenAI API key in Settings for AI-powered extraction with better understanding</li>
+                  <li>Works best with well-formatted content (bullet points, definitions, numbered lists)</li>
                 </>
               )}
               <li>Remove headers, footers, and page numbers for cleaner output</li>

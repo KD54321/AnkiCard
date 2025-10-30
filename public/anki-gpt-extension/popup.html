@@ -1,78 +1,170 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>🎴 Anki Flashcard Generator</h1>
-      <p class="subtitle">Step 1: Prepare your prompt</p>
-    </div>
+document.addEventListener('DOMContentLoaded', () => {
+  const textInput = document.getElementById('textInput');
+  const cardFormat = document.getElementById('cardFormat');
+  const generateBtn = document.getElementById('generateBtn');
+  const copyBtn = document.getElementById('copyBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const charCount = document.getElementById('charCount');
+  const statusDiv = document.getElementById('status');
 
-    <div class="status" id="status">
-      <div class="status-icon">ℹ️</div>
-      <div class="status-text">Paste your PDF text below</div>
-    </div>
+  // Load saved data
+  chrome.storage.local.get(['pdfText', 'cardFormat'], (result) => {
+    if (result.pdfText) {
+      textInput.value = result.pdfText;
+      updateCharCount();
+    }
+    if (result.cardFormat) {
+      cardFormat.value = result.cardFormat;
+    }
+  });
 
-    <div class="form-group">
-      <label for="cardFormat">Card Format:</label>
-      <select id="cardFormat">
-        <option value="basic">Basic (Question → Answer)</option>
-        <option value="cloze">Cloze Deletion (Fill-in-blank)</option>
-      </select>
-    </div>
+  textInput.addEventListener('input', () => {
+    updateCharCount();
+    chrome.storage.local.set({ pdfText: textInput.value });
+  });
 
-    <div class="form-group">
-      <label for="textInput">PDF Text:</label>
-      <textarea 
-        id="textInput" 
-        placeholder="Paste your extracted PDF text here...
+  cardFormat.addEventListener('change', () => {
+    chrome.storage.local.set({ cardFormat: cardFormat.value });
+  });
 
-Example:
-Myopia: A refractive error where distant objects appear blurry
-Hyperopia: Farsightedness where near objects are blurry"
-        rows="8"
-      ></textarea>
-      <div class="char-count" id="charCount">0 characters</div>
-    </div>
+  function updateCharCount() {
+    const count = textInput.value.length;
+    charCount.textContent = `${count.toLocaleString()} characters`;
+  }
 
-    <div class="button-group">
-      <button id="generateBtn" class="btn btn-primary">
-        <span class="btn-icon">✨</span>
-        Generate in ChatGPT
-      </button>
-      <button id="copyBtn" class="btn btn-secondary-alt">
-        📋 Copy Prompt
-      </button>
-    </div>
+  function updateStatus(icon, text, type = 'info') {
+    statusDiv.className = `status status-${type}`;
+    statusDiv.innerHTML = `
+      <div class="status-icon">${icon}</div>
+      <div class="status-text">${text}</div>
+    `;
+  }
 
-    <div class="button-group">
-      <button id="clearBtn" class="btn btn-secondary">
-        Clear
-      </button>
-    </div>
+  // Copy prompt only
+  copyBtn.addEventListener('click', () => {
+    const text = textInput.value.trim();
+    if (!text) {
+      updateStatus('⚠️', 'Please enter some text first', 'warning');
+      return;
+    }
 
-    <div class="instructions">
-      <h3>📋 How to use:</h3>
-      <ol>
-        <li><strong>From your webapp:</strong> Copy extracted PDF text</li>
-        <li><strong>Paste here</strong> and select card format</li>
-        <li><strong>Click "Generate in ChatGPT"</strong> - opens ChatGPT with prompt</li>
-        <li><strong>Wait for response</strong> - ChatGPT generates JSON</li>
-        <li><strong>Copy the JSON</strong> from ChatGPT</li>
-        <li><strong>Go back to webapp</strong> and import the JSON</li>
-      </ol>
-    </div>
+    const prompt = generatePrompt(text, cardFormat.value);
+    navigator.clipboard.writeText(prompt).then(() => {
+      updateStatus('✅', 'Prompt copied! Open ChatGPT and paste it', 'success');
+    });
+  });
 
-    <div class="info-box">
-      <p><strong>💡 Tip:</strong> Make sure you're logged into ChatGPT!</p>
-      <p><strong>🔒 Privacy:</strong> All processing happens locally</p>
-    </div>
-  </div>
+  // Generate in ChatGPT
+  generateBtn.addEventListener('click', async () => {
+    const text = textInput.value.trim();
+    
+    if (!text) {
+      updateStatus('⚠️', 'Please enter some text first', 'warning');
+      return;
+    }
 
-  <script src="popup.js"></script>
-</body>
-</html>
+    const format = cardFormat.value;
+    const prompt = generatePrompt(text, format);
+    
+    await chrome.storage.local.set({ 
+      promptToSend: prompt,
+      pendingGeneration: true
+    });
+
+    updateStatus('✨', 'Opening ChatGPT...', 'info');
+
+    chrome.tabs.create({ 
+      url: 'https://chatgpt.com',
+      active: true
+    }, (tab) => {
+      setTimeout(() => {
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'fillPrompt',
+          prompt: prompt
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.log('Tab not ready, will inject on load');
+          }
+        });
+      }, 2500);
+    });
+  });
+
+  clearBtn.addEventListener('click', () => {
+    textInput.value = '';
+    updateCharCount();
+    chrome.storage.local.remove(['pdfText', 'promptToSend', 'pendingGeneration']);
+    updateStatus('ℹ️', 'Cleared! Ready for new text', 'info');
+  });
+
+  function generatePrompt(text, format) {
+    const formatInstructions = format === 'cloze' 
+      ? 'Créez des cartes à trous en utilisant le format {{c1::texte}} pour les termes clés. / Create cloze deletion cards using {{c1::text}} format for key terms.'
+      : 'Créez des cartes question-réponse avec des questions claires et spécifiques. / Create question-answer flashcards with clear, specific questions.';
+
+    return `I need you to create Anki flashcards from my study notes.
+
+CRITICAL: Return your response as JSON wrapped in a code block like this:
+\`\`\`json
+{
+  "cards": [...]
+}
+\`\`\`
+
+FORMAT: ${format === 'cloze' ? 'Cloze Deletion / Texte à trous' : 'Basic Question-Answer / Question-Réponse'}
+${formatInstructions}
+
+QUALITY REQUIREMENTS / EXIGENCES DE QUALITÉ:
+- Test understanding, not memorization / Testez la compréhension, pas la mémorisation
+- One concept per card / Un concept par carte
+- Clear and unambiguous / Clair et sans ambiguïté
+- Include difficulty level (easy/medium/hard) / Incluez le niveau de difficulté (facile/moyen/difficile)
+- Add relevant tags for organization / Ajoutez des étiquettes pertinentes pour l'organisation
+- IMPORTANT: Keep the same language as the source material (French or English) / Gardez la même langue que le matériel source (français ou anglais)
+
+EXAMPLES FOR FRENCH CONTENT / EXEMPLES POUR LE CONTENU FRANÇAIS:
+${format === 'cloze' ? `
+- "L'hypermétropie moyenne du nouveau-né est de {{c1::+2.00 dioptries}}."
+- "Le phénomène d'emmétropisation se produit de la naissance jusqu'à {{c1::7-8 ans}}."
+- "La myopie congénitale élevée a tendance à {{c1::rester stable}}."
+` : `
+- "Quelle est l'hypermétropie moyenne du nouveau-né?"
+- "À quel âge se termine le phénomène d'emmétropisation?"
+- "Comment évolue la myopie congénitale élevée?"
+`}
+
+EXAMPLES FOR ENGLISH CONTENT / EXEMPLES POUR LE CONTENU ANGLAIS:
+${format === 'cloze' ? `
+- "Myopia occurs when light focuses {{c1::in front of}} the retina."
+- "The emmetropization process continues until {{c1::7-8 years}} of age."
+- "High congenital myopia tends to {{c1::remain stable}}."
+` : `
+- "What causes distant objects to appear blurry in myopia?"
+- "At what age does the emmetropization process complete?"
+- "How does high congenital myopia typically progress?"
+`}
+
+OUTPUT FORMAT - Return as a JSON code block:
+\`\`\`json
+{
+  "cards": [
+    {
+      "front": "${format === 'cloze' ? 'Statement with {{c1::hidden text}} / Énoncé avec {{c1::texte caché}}' : 'Clear question / Question claire'}",
+      "back": "${format === 'cloze' ? 'The hidden answer / La réponse cachée' : 'Detailed answer with context / Réponse détaillée avec contexte'}",
+      "tags": ["topic1", "topic2"],
+      "difficulty": "medium"
+    }
+  ],
+  "concepts": ["concept1", "concept2"],
+  "medicalTerms": ["term1", "term2"],
+  "summary": "Brief overview of content / Aperçu du contenu"
+}
+\`\`\`
+
+MY STUDY NOTES / MES NOTES D'ÉTUDE:
+${text.substring(0, 4000)}
+
+Generate 15-20 high-quality flashcards. Return ONLY the JSON code block above, no other text before or after.
+Générez 15-20 cartes de haute qualité. Retournez UNIQUEMENT le bloc JSON ci-dessus, pas d'autre texte avant ou après.`;
+  }
+});

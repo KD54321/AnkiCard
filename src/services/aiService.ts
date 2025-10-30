@@ -55,9 +55,36 @@ export class AIService {
 
     try {
       console.log('Using OpenAI to generate flashcards...');
-      const prompt = this.buildPrompt(text, format);
-      const response = await this.callOpenAI(prompt, apiKey);
-      return this.parseAIResponse(response, format);
+      
+      // For large documents, process in chunks
+      const chunks = this.intelligentChunk(text);
+      console.log(`Processing document in ${chunks.length} chunks`);
+      
+      if (chunks.length === 1) {
+        // Single chunk - process normally
+        const prompt = this.buildPrompt(chunks[0], format);
+        const response = await this.callOpenAI(prompt, apiKey);
+        return this.parseAIResponse(response, format);
+      } else {
+        // Multiple chunks - process each and combine
+        const allResults: ExtractionResult[] = [];
+        
+        for (let i = 0; i < chunks.length; i++) {
+          console.log(`Processing chunk ${i + 1}/${chunks.length}...`);
+          const prompt = this.buildPrompt(chunks[i], format, i + 1, chunks.length);
+          const response = await this.callOpenAI(prompt, apiKey);
+          const result = this.parseAIResponse(response, format);
+          allResults.push(result);
+          
+          // Small delay to avoid rate limits
+          if (i < chunks.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+        
+        // Combine results
+        return this.combineResults(allResults);
+      }
     } catch (error) {
       console.error('OpenAI extraction failed, using fallback:', error);
       return this.fallbackExtraction(text, format);
@@ -80,73 +107,175 @@ export class AIService {
     return this.generateFlashcards(text, format);
   }
 
-  private static buildPrompt(text: string, format: string): string {
+  private static intelligentChunk(text: string): string[] {
+    // If text is short enough, return as single chunk
+    if (text.length <= 6000) {
+      return [text];
+    }
+
+    const chunks: string[] = [];
+    const sections = text.split(/\n\n+/); // Split by double newlines (paragraphs/sections)
+    let currentChunk = '';
+    
+    for (const section of sections) {
+      // If adding this section would exceed chunk size and we have content
+      if (currentChunk.length + section.length > 6000 && currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = section;
+      } else {
+        currentChunk += (currentChunk ? '\n\n' : '') + section;
+      }
+    }
+    
+    // Add the last chunk
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+    
+    // If we still have no chunks or only one very large chunk, split by character count
+    if (chunks.length === 0 || (chunks.length === 1 && chunks[0].length > 6000)) {
+      chunks.length = 0;
+      const chunkSize = 6000;
+      for (let i = 0; i < text.length; i += chunkSize) {
+        chunks.push(text.substring(i, i + chunkSize));
+      }
+    }
+    
+    return chunks;
+  }
+
+  private static combineResults(results: ExtractionResult[]): ExtractionResult {
+    const allCards: FlashCard[] = [];
+    const allConcepts = new Set<string>();
+    const allTerms = new Set<string>();
+    const summaries: string[] = [];
+    
+    results.forEach(result => {
+      allCards.push(...result.cards);
+      result.concepts.forEach(c => allConcepts.add(c));
+      result.medicalTerms.forEach(t => allTerms.add(t));
+      if (result.summary) summaries.push(result.summary);
+    });
+    
+    // Remove duplicate cards (same front text)
+    const uniqueCards = allCards.filter((card, index, self) => 
+      index === self.findIndex(c => c.front === card.front)
+    );
+    
+    return {
+      cards: uniqueCards,
+      concepts: Array.from(allConcepts),
+      medicalTerms: Array.from(allTerms),
+      summary: summaries.length > 0 ? summaries.join(' ') : 'Combined content from multiple sections'
+    };
+  }
+
+  private static buildPrompt(text: string, format: string, chunkNum?: number, totalChunks?: number): string {
+    const chunkInfo = chunkNum && totalChunks ? ` (Part ${chunkNum} of ${totalChunks})` : '';
+    const cardCount = totalChunks && totalChunks > 1 ? Math.ceil(30 / totalChunks) : 25;
+    
+    // Detect if content is primarily French
+    const isFrench = /[àâäæçéèêëïîôùûüÿœ]/i.test(text) || 
+                     /\b(le|la|les|un|une|des|est|sont|et|ou|dans|pour|avec)\b/i.test(text);
+    
     if (format === 'cloze') {
-      return `Create 15-20 cloze deletion flashcards from this content.
+      return `Create ${cardCount} cloze deletion flashcards from this ${isFrench ? 'French' : 'English'} medical/optometry content${chunkInfo}.
+
+${isFrench ? 'IMPORTANT: The source content is in FRENCH. You MUST create all flashcards in FRENCH.' : 'IMPORTANT: The source content is in ENGLISH. You MUST create all flashcards in ENGLISH.'}
 
 CONTENT:
-${text.substring(0, 3000)}
+${text.substring(0, 6000)}
 
 CLOZE DELETION RULES:
 - Use {{c1::text}} to mark what should be hidden
-- Hide KEY concepts, not trivial words
+- Hide KEY concepts, numbers, definitions - not trivial words
 - Each card tests ONE concept
 - Include enough context
+- For lists/sequences, create multiple cards
+- **MAINTAIN THE SAME LANGUAGE AS THE SOURCE (${isFrench ? 'FRENCH' : 'ENGLISH'})**
 
 QUALITY STANDARDS:
 ✓ Test understanding, not just memorization
 ✓ Clear and unambiguous
 ✓ One concept per card
+✓ All cards in ${isFrench ? 'French' : 'English'}
 
-Return ONLY valid JSON:
+${isFrench ? `EXAMPLES (French medical content - USE THIS STYLE):
+- "L'hypermétropie moyenne du nouveau-né est de {{c1::+2.00 dioptries}}."
+- "Le phénomène d'emmétropisation se produit de la naissance jusqu'à {{c1::7-8 ans}}."
+- "Les faibles myopies ont tendance à {{c1::s'améliorer ou devenir myopes}}."
+- "La cycloplégie élimine l'aspect de {{c1::l'accommodation}}."
+- "La rétinoscopie Indra Mohindra nécessite de soustraire {{c1::1.25D}}."` : `EXAMPLES (English medical content):
+- "The average hyperopia in newborns is {{c1::+2.00 diopters}}."
+- "The emmetropization phenomenon occurs from birth until {{c1::7-8 years}}."
+- "Low myopias tend to {{c1::improve or become myopic}}."
+- "Cycloplegia eliminates the aspect of {{c1::accommodation}}."
+- "Indra Mohindra retinoscopy requires subtracting {{c1::1.25D}}."`}
+
+Return ONLY valid JSON (no markdown, no code blocks):
 {
   "cards": [
     {
-      "front": "Myopia occurs when light focuses {{c1::in front of}} the retina.",
-      "back": "in front of",
-      "tags": ["refraction", "myopia"],
+      "front": "${isFrench ? 'Énoncé avec {{c1::texte caché}}' : 'Statement with {{c1::hidden text}}'}",
+      "back": "${isFrench ? 'La réponse cachée' : 'The hidden answer'}",
+      "tags": ["topic1", "topic2"],
       "difficulty": "medium"
     }
   ],
-  "concepts": ["myopia", "refraction"],
-  "medicalTerms": ["myopia", "retina"],
-  "summary": "Brief overview"
+  "concepts": ["concept1", "concept2"],
+  "medicalTerms": ["term1", "term2"],
+  "summary": "${isFrench ? 'Aperçu bref du contenu' : 'Brief overview'}"
 }`;
     } else {
-      return `Create 15-20 high-quality flashcards from this content.
+      return `Create ${cardCount} high-quality flashcards from this ${isFrench ? 'French' : 'English'} medical/optometry content${chunkInfo}.
+
+${isFrench ? 'IMPORTANT: The source content is in FRENCH. You MUST create all flashcards in FRENCH.' : 'IMPORTANT: The source content is in ENGLISH. You MUST create all flashcards in ENGLISH.'}
 
 CONTENT:
-${text.substring(0, 3000)}
+${text.substring(0, 6000)}
 
 QUESTION DESIGN:
 1. Test UNDERSTANDING, not recognition
-2. Ask "Why?", "How?", "Compare", "Explain"
+2. Ask "Why?", "How?", "Compare", "Explain", "What happens if?"
 3. Be specific and clear
 4. One concept per card
+5. **USE ${isFrench ? 'FRENCH' : 'ENGLISH'} for ALL questions and answers**
 
-GOOD EXAMPLES:
+${isFrench ? `GOOD EXAMPLES (French medical - USE THIS STYLE):
+✓ "Quelle est l'hypermétropie moyenne du nouveau-né?"
+✓ "Comment évolue l'astigmatisme durant la première année?"
+✓ "Pourquoi les fortes amétropies restent-elles stables?"
+✓ "Quelle est la différence entre hypermétropie latente et manifeste?"
+✓ "Quel est le facteur d'ajustement pour la rétinoscopie Indra Mohindra?"
+✓ "À quel âge se termine le phénomène d'emmétropisation?"
+
+BAD EXAMPLES:
+✗ "What is myopia?" (WRONG LANGUAGE - must be French!)
+✗ "Qu'est-ce que c'est?" (too vague)` : `GOOD EXAMPLES (English):
 ✓ "What causes distant objects to appear blurry in myopia?"
 ✓ "How does myopia differ from hyperopia?"
 ✓ "Why does the lens need to change shape?"
+✓ "What is the difference between latent and manifest hyperopia?"
+✓ "What adjustment factor is used in Mohindra retinoscopy?"
+✓ "At what age does emmetropization complete?"
 
 BAD EXAMPLES:
-✗ "What is myopia?" (too vague)
-✗ "Name something" (too broad)
-✗ "Is myopia bad?" (yes/no)
+✗ "Quelle est la myopie?" (WRONG LANGUAGE - must be English!)
+✗ "What is it?" (too vague)`}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON (no markdown, no code blocks):
 {
   "cards": [
     {
-      "front": "What causes distant objects to appear blurry in myopia?",
-      "back": "The eye focuses light in front of the retina instead of on it.",
-      "tags": ["refraction", "myopia"],
+      "front": "${isFrench ? 'Question claire en français' : 'Clear English question'}",
+      "back": "${isFrench ? 'Réponse détaillée en français avec contexte' : 'Detailed English answer with context'}",
+      "tags": ["topic1", "topic2"],
       "difficulty": "medium"
     }
   ],
-  "concepts": ["myopia", "refraction"],
-  "medicalTerms": ["myopia", "retina"],
-  "summary": "Brief overview"
+  "concepts": ["concept1", "concept2"],
+  "medicalTerms": ["term1", "term2"],
+  "summary": "${isFrench ? 'Aperçu bref du contenu' : 'Brief overview'}"
 }`;
     }
   }
@@ -165,7 +294,7 @@ Return ONLY valid JSON:
         messages: [
           {
             role: 'system',
-            content: 'You are an expert educator creating high-quality Anki flashcards. You always respond with valid JSON only.'
+            content: 'You are an expert medical educator creating high-quality Anki flashcards for optometry students. You understand both French and English medical terminology perfectly. CRITICAL: You MUST maintain the same language as the source material - if the source is in French, ALL cards must be in French; if English, ALL cards must be in English. You always respond with valid JSON only, with no markdown formatting or code blocks - just pure JSON.'
           },
           {
             role: 'user',
@@ -173,7 +302,7 @@ Return ONLY valid JSON:
           }
         ],
         temperature: 0.3,
-        max_tokens: 2000,
+        max_tokens: 4000, // Increased for up to 50 cards
         response_format: { type: "json_object" }
       })
     });
@@ -236,36 +365,51 @@ Return ONLY valid JSON:
     const conceptsSet = new Set<string>();
     const medicalTermsSet = new Set<string>();
 
-    const definitionPattern = /^([A-Z][^:—-]{2,50})[:—-]\s*(.+)$/;
+    // Enhanced patterns for French and English medical content
+    const definitionPattern = /^([A-ZÀ-Ö][^:—-]{2,50})[:—-]\s*(.+)$/;
     const bulletPattern = /^[•\-*]\s*(.+)$/;
-    const numberedPattern = /^\d+\.\s*(.+)$/;
+    const numberedPattern = /^\d+[\.)]\s*(.+)$/;
+    const headerPattern = /^([A-ZÀ-Ö][A-ZÀ-Öa-zà-ö\s]{3,50})$/;
+    
+    let currentSection = 'general';
+    let previousLine = '';
 
     lines.forEach((line, index) => {
-      if (line.length < 15 || cards.length >= 25) return;
+      if (line.length < 15 || cards.length >= 40) return;
 
+      // Detect section headers
+      const headerMatch = line.match(headerPattern);
+      if (headerMatch && line.length < 80 && !line.includes('.')) {
+        currentSection = this.extractTag(line);
+        return;
+      }
+
+      // Pattern 1: Definition-style (Term: Definition)
       const defMatch = line.match(definitionPattern);
       if (defMatch) {
         const [, term, definition] = defMatch;
         const cleanTerm = term.trim();
         const cleanDef = definition.trim();
         
-        if (cleanDef.length > 10) {
+        if (cleanDef.length > 10 && cleanDef.length < 500) {
           if (format === 'cloze') {
             cards.push({
               id: `card-${Date.now()}-${index}`,
               front: `${cleanTerm}: {{c1::${cleanDef}}}`,
               back: cleanDef,
               type: format,
-              tags: [this.extractTag(cleanTerm)],
+              tags: [currentSection, this.extractTag(cleanTerm)],
               difficulty: 'medium'
             });
           } else {
+            // Create better questions
+            const question = this.generateQuestion(cleanTerm, cleanDef);
             cards.push({
               id: `card-${Date.now()}-${index}`,
-              front: `What is ${cleanTerm}?`,
+              front: question,
               back: cleanDef,
               type: format,
-              tags: [this.extractTag(cleanTerm)],
+              tags: [currentSection, this.extractTag(cleanTerm)],
               difficulty: 'easy'
             });
           }
@@ -277,41 +421,62 @@ Return ONLY valid JSON:
         return;
       }
 
+      // Pattern 2: Bullet points and numbered lists
       const bulletMatch = line.match(bulletPattern) || line.match(numberedPattern);
       const content = bulletMatch ? bulletMatch[1] : line;
       
-      if (content.length > 20 && content.length < 300) {
-        if (content.includes(' is ') || content.includes(' are ')) {
-          const parts = content.split(/ is | are /);
-          if (parts.length === 2 && parts[0].length > 3 && parts[1].length > 5) {
-            cards.push({
-              id: `card-${Date.now()}-${index}`,
-              front: format === 'cloze' 
-                ? content.replace(parts[1], `{{c1::${parts[1]}}}`)
-                : `What can you tell me about ${parts[0].trim()}?`,
-              back: parts[1].trim(),
-              type: format,
-              tags: [this.extractTag(content)],
-              difficulty: 'easy'
-            });
-            return;
+      if (content.length > 20 && content.length < 400) {
+        // Look for key medical/numerical information
+        const hasNumber = /\d+[.,]?\d*\s*(D|dioptries|dioptrie|%|mm|cm|ans|mois|semaines)/i.test(content);
+        const hasKeyTerm = /myopie|hypermétropie|astigmatisme|réfraction|accommodation|cycloplégie/i.test(content);
+        
+        if (hasNumber || hasKeyTerm || content.includes(' est ') || content.includes(' sont ')) {
+          if (format === 'cloze') {
+            // For cloze, hide the most important part
+            let clozeContent = content;
+            
+            // Hide numbers with units
+            clozeContent = clozeContent.replace(
+              /(\d+[.,]?\d*\s*(?:D|dioptries?|%|mm|cm|ans?|mois|semaines?))/i,
+              '{{c1::$1}}'
+            );
+            
+            // If no number was found, hide key terms
+            if (!clozeContent.includes('{{c1::')) {
+              const keyTermMatch = content.match(/(myopie|hypermétropie|astigmatisme|réfraction|accommodation|cycloplégie|emmétropisation)/i);
+              if (keyTermMatch) {
+                clozeContent = content.replace(keyTermMatch[0], `{{c1::${keyTermMatch[0]}}}`);
+              }
+            }
+            
+            if (clozeContent.includes('{{c1::')) {
+              cards.push({
+                id: `card-${Date.now()}-${index}`,
+                front: clozeContent,
+                back: content.match(/{{c1::(.+?)}}/)?.[1] || content,
+                type: format,
+                tags: [currentSection, this.extractTag(content)],
+                difficulty: hasNumber ? 'hard' : 'medium'
+              });
+            }
+          } else {
+            // For basic cards, create a question
+            const question = this.generateQuestionFromStatement(content, previousLine);
+            if (question) {
+              cards.push({
+                id: `card-${Date.now()}-${index}`,
+                front: question,
+                back: content,
+                type: format,
+                tags: [currentSection, this.extractTag(content)],
+                difficulty: hasNumber ? 'medium' : 'easy'
+              });
+            }
           }
         }
-
-        const words = content.split(' ');
-        if (words.length > 8) {
-          const subject = words.slice(0, Math.min(4, Math.floor(words.length / 3))).join(' ');
-          
-          cards.push({
-            id: `card-${Date.now()}-${index}`,
-            front: `Explain: ${subject}...`,
-            back: content,
-            type: format,
-            tags: [this.extractTag(content)],
-            difficulty: 'easy'
-          });
-        }
       }
+      
+      previousLine = line;
     });
 
     const summary = lines.slice(0, 3).join(' ').substring(0, 250) + '...';
@@ -319,18 +484,70 @@ Return ONLY valid JSON:
     console.log(`Fallback extraction generated ${cards.length} cards`);
     
     return {
-      cards: cards.slice(0, 25),
-      concepts: Array.from(conceptsSet).slice(0, 15),
+      cards: cards.slice(0, 40),
+      concepts: Array.from(conceptsSet).slice(0, 20),
       summary,
-      medicalTerms: Array.from(medicalTermsSet).slice(0, 10)
+      medicalTerms: Array.from(medicalTermsSet).slice(0, 15)
     };
+  }
+
+  private static generateQuestion(term: string, definition: string): string {
+    // French patterns
+    if (/^[A-ZÀ-Ö]/.test(term) && (definition.includes('est') || definition.includes('sont'))) {
+      return `Qu'est-ce que ${term.toLowerCase()}?`;
+    }
+    
+    // Check for specific question types
+    if (definition.match(/\d+/)) {
+      return `Quelle est la valeur de ${term.toLowerCase()}?`;
+    }
+    
+    // English patterns
+    return `What is ${term}?`;
+  }
+
+  private static generateQuestionFromStatement(statement: string, context: string): string | null {
+    // Try to convert statement into a question
+    
+    // Pattern: "X est Y" -> "Qu'est-ce que X?"
+    const isMatch = statement.match(/^(.+?)\s+(?:est|sont)\s+(.+)$/i);
+    if (isMatch) {
+      const subject = isMatch[1].trim();
+      if (subject.length < 60) {
+        return `Qu'est-ce que ${subject.toLowerCase()}?`;
+      }
+    }
+    
+    // Pattern: Contains number -> Ask about the number
+    const numberMatch = statement.match(/(\d+[.,]?\d*)\s*(D|dioptries?|%|mm|cm|ans?|mois|semaines?)/i);
+    if (numberMatch) {
+      // Try to extract what the number refers to
+      const before = statement.substring(0, statement.indexOf(numberMatch[0])).trim();
+      if (before.length > 5 && before.length < 100) {
+        return `Quelle est la valeur de ${before.toLowerCase()}?`;
+      }
+    }
+    
+    // Pattern: "Les X ont tendance à Y" -> "Que se passe-t-il avec les X?"
+    const tendencyMatch = statement.match(/les?\s+(.+?)\s+(?:ont tendance à|a tendance à)\s+(.+)/i);
+    if (tendencyMatch) {
+      return `Comment évoluent ${tendencyMatch[1]}?`;
+    }
+    
+    // Default: if statement is short enough, ask to explain it
+    if (statement.length < 150 && statement.length > 30) {
+      const firstWords = statement.split(' ').slice(0, 5).join(' ');
+      return `Expliquez: ${firstWords}...`;
+    }
+    
+    return null;
   }
 
   private static extractTag(text: string): string {
     const words = text.split(' ');
-    const firstWord = words[0].replace(/[^a-zA-Z]/g, '');
+    const firstWord = words[0].replace(/[^a-zA-ZÀ-ÿ]/g, '');
     
-    const commonTerms = ['retina', 'cornea', 'lens', 'vision', 'anatomy', 'physiology'];
+    const commonTerms = ['retina', 'cornea', 'lens', 'vision', 'anatomy', 'physiology', 'myopie', 'hypermétropie', 'astigmatisme', 'réfraction'];
     const lowerText = text.toLowerCase();
     
     for (const term of commonTerms) {
@@ -343,7 +560,7 @@ Return ONLY valid JSON:
   }
 
   private static isMedicalTerm(text: string): boolean {
-    const medicalPatterns = /ophthalm|retina|cornea|medical|clinical|diagnosis|treatment|symptom|disease|condition/i;
+    const medicalPatterns = /ophthalm|retina|cornea|medical|clinical|diagnosis|treatment|symptom|disease|condition|myopie|hypermétropie|dioptrie/i;
     return medicalPatterns.test(text);
   }
 

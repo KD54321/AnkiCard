@@ -110,7 +110,29 @@ function manualExtract() {
   } else {
     console.log('❌ Manual extraction failed:', response.error);
     updateDebugStatus('❌ ' + response.error);
-    showNotification('❌ No valid JSON found', 'error');
+    
+    // Show helpful message
+    showNotification(
+      '❌ Could not find valid JSON. Make sure ChatGPT finished responding and returned the JSON format.',
+      'error',
+      8000
+    );
+    
+    // Log what we found for debugging
+    const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
+    if (messages.length > 0) {
+      const latestMessage = messages[messages.length - 1];
+      const preview = (latestMessage.textContent || '').substring(0, 200);
+      console.log('Latest message preview:', preview);
+      
+      if (!preview.includes('"cards"')) {
+        showNotification(
+          '💡 Tip: Ask ChatGPT to return the response as JSON with a "cards" array',
+          'info',
+          6000
+        );
+      }
+    }
   }
 }
 
@@ -566,11 +588,11 @@ function extractChatGPTResponse() {
     const latestMessage = messages[messages.length - 1];
     console.log('📝 Found latest message');
     
-    // Look for code blocks
+    // Strategy 1: Look for code blocks first
     const codeBlocks = latestMessage.querySelectorAll('code, pre');
     console.log(`Found ${codeBlocks.length} code blocks`);
     
-    // Try each code block, don't stop at first failure
+    // Try each code block
     for (let i = 0; i < codeBlocks.length; i++) {
       const block = codeBlocks[i];
       let text = block.textContent || '';
@@ -588,58 +610,58 @@ function extractChatGPTResponse() {
         continue;
       }
       
-      try {
-        // Aggressive cleaning
-        text = text
-          .replace(/^jsonCopy\s*/gi, '') // Remove "jsonCopy" prefix
-          .replace(/^json\s*/gi, '')      // Remove "json" prefix
-          .replace(/Copy\s*/gi, '')       // Remove "Copy" prefix
-          .replace(/```json\s*/gi, '')
-          .replace(/```javascript\s*/gi, '')
-          .replace(/```\s*/g, '')
-          .replace(/^[\s\n]+/, '')
-          .replace(/[\s\n]+$/, '')
-          .trim();
+      const result = tryParseJSON(text, `code block ${i + 1}`);
+      if (result.success) return result;
+    }
+    
+    // Strategy 2: If no code blocks worked, try the entire message text
+    console.log('⚠️ No valid JSON in code blocks, trying full message text...');
+    const fullText = latestMessage.textContent || '';
+    
+    if (fullText.includes('"cards"') && fullText.includes('[')) {
+      console.log(`Checking full message text (${fullText.length} chars)`);
+      
+      // Try to extract JSON from the message
+      // Look for content between { and } that contains "cards"
+      const jsonMatches = fullText.match(/\{[\s\S]*?"cards"[\s\S]*?\]/);
+      
+      if (jsonMatches) {
+        // Find the complete JSON object
+        let startIdx = fullText.indexOf(jsonMatches[0]);
+        let braceCount = 0;
+        let endIdx = startIdx;
         
-        // Additional check: text must start with {
-        if (!text.startsWith('{')) {
-          console.log(`Skipping code block ${i + 1} (doesn't start with {)`);
-          console.log('Text preview:', text.substring(0, 50));
-          continue;
-        }
-        
-        const parsed = JSON.parse(text);
-        
-        // Validate structure
-        if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
-          const validCards = parsed.cards.filter(card => 
-            card.front && card.back && 
-            typeof card.front === 'string' && 
-            typeof card.back === 'string'
-          );
-          
-          if (validCards.length > 0) {
-            console.log(`✅ Found ${validCards.length} valid cards in block ${i + 1}`);
-            
-            if (validCards.length !== parsed.cards.length) {
-              console.log(`⚠️ Filtered out ${parsed.cards.length - validCards.length} invalid cards`);
-              parsed.cards = validCards;
-            }
-            
-            return { success: true, json: JSON.stringify(parsed) };
-          } else {
-            console.log(`⚠️ Block ${i + 1} has cards array but no valid cards`);
+        for (let i = startIdx; i < fullText.length; i++) {
+          if (fullText[i] === '{') braceCount++;
+          if (fullText[i] === '}') braceCount--;
+          if (braceCount === 0 && fullText[i] === '}') {
+            endIdx = i + 1;
+            break;
           }
         }
-      } catch (e) {
-        console.log(`❌ Parse failed for block ${i + 1}:`, e.message);
-        console.log('Problematic text start:', text.substring(0, 100));
-        // Continue to next block instead of giving up
-        continue;
+        
+        const possibleJSON = fullText.substring(startIdx, endIdx);
+        console.log(`Extracted possible JSON (${possibleJSON.length} chars)`);
+        
+        const result = tryParseJSON(possibleJSON, 'full message extraction');
+        if (result.success) return result;
       }
     }
     
-    console.log('❌ No valid JSON found in any code block');
+    // Strategy 3: Look in markdown/prose sections
+    console.log('⚠️ Trying to find JSON in prose text...');
+    const paragraphs = latestMessage.querySelectorAll('p, div');
+    
+    for (let i = 0; i < paragraphs.length; i++) {
+      const text = paragraphs[i].textContent || '';
+      if (text.includes('"cards"') && text.includes('[') && text.length > 100) {
+        console.log(`Checking paragraph ${i + 1} (${text.length} chars)`);
+        const result = tryParseJSON(text, `paragraph ${i + 1}`);
+        if (result.success) return result;
+      }
+    }
+    
+    console.log('❌ No valid JSON found anywhere in the message');
     return { success: false, error: 'No valid JSON found' };
     
   } catch (error) {
@@ -648,13 +670,75 @@ function extractChatGPTResponse() {
   }
 }
 
+function tryParseJSON(text, source) {
+  try {
+    // Aggressive cleaning
+    let cleaned = text
+      .replace(/^jsonCopy\s*/gi, '')
+      .replace(/^json\s*/gi, '')
+      .replace(/Copy\s*/gi, '')
+      .replace(/```json\s*/gi, '')
+      .replace(/```javascript\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .replace(/^[\s\n]+/, '')
+      .replace(/[\s\n]+$/, '')
+      .trim();
+    
+    // Find first { and last }
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    
+    if (firstBrace === -1 || lastBrace === -1 || firstBrace >= lastBrace) {
+      console.log(`${source}: No valid JSON structure (no braces)`);
+      return { success: false };
+    }
+    
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    
+    if (!cleaned.startsWith('{')) {
+      console.log(`${source}: Doesn't start with {`);
+      return { success: false };
+    }
+    
+    const parsed = JSON.parse(cleaned);
+    
+    // Validate structure
+    if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
+      const validCards = parsed.cards.filter(card => 
+        card.front && card.back && 
+        typeof card.front === 'string' && 
+        typeof card.back === 'string'
+      );
+      
+      if (validCards.length > 0) {
+        console.log(`✅ Found ${validCards.length} valid cards in ${source}`);
+        
+        if (validCards.length !== parsed.cards.length) {
+          console.log(`⚠️ Filtered out ${parsed.cards.length - validCards.length} invalid cards`);
+          parsed.cards = validCards;
+        }
+        
+        return { success: true, json: JSON.stringify(parsed) };
+      } else {
+        console.log(`⚠️ ${source} has cards array but no valid cards`);
+      }
+    } else {
+      console.log(`⚠️ ${source} missing cards array or empty`);
+    }
+  } catch (e) {
+    console.log(`❌ Parse failed for ${source}:`, e.message);
+  }
+  
+  return { success: false };
+}
+
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).catch(err => {
     console.error('Failed to copy:', err);
   });
 }
 
-function showNotification(message, type = 'info') {
+function showNotification(message, type = 'info', duration = 5000) {
   const existing = document.getElementById('anki-notification');
   if (existing) existing.remove();
 
@@ -665,7 +749,7 @@ function showNotification(message, type = 'info') {
     top: 20px;
     right: 20px;
     padding: 16px 24px;
-    background: ${type === 'success' ? '#10b981' : type === 'warning' ? '#f59e0b' : '#3b82f6'};
+    background: ${type === 'success' ? '#10b981' : type === 'warning' ? '#f59e0b' : type === 'error' ? '#ef4444' : '#3b82f6'};
     color: white;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
@@ -698,5 +782,5 @@ function showNotification(message, type = 'info') {
   setTimeout(() => {
     notification.style.animation = 'slideOut 0.3s ease-out';
     setTimeout(() => notification.remove(), 300);
-  }, 5000);
+  }, duration);
 }
