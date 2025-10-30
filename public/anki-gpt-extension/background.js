@@ -134,7 +134,7 @@ async function handleGenerateFromWebapp(request, sendResponse) {
           error: 'Failed to communicate with ChatGPT tab. Please refresh the ChatGPT page and try again.' 
         });
       }
-    }, 2500);
+    }, 4000);
     
   } catch (error) {
     console.error('Error in handleGenerateFromWebapp:', error);

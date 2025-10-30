@@ -671,65 +671,72 @@ function extractChatGPTResponse() {
 }
 
 function tryParseJSON(text, source) {
-  try {
-    // Aggressive cleaning
-    let cleaned = text
-      .replace(/^jsonCopy\s*/gi, '')
-      .replace(/^json\s*/gi, '')
-      .replace(/Copy\s*/gi, '')
-      .replace(/```json\s*/gi, '')
-      .replace(/```javascript\s*/gi, '')
-      .replace(/```\s*/g, '')
-      .replace(/^[\s\n]+/, '')
-      .replace(/[\s\n]+$/, '')
-      .trim();
-    
-    // Find first { and last }
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    
-    if (firstBrace === -1 || lastBrace === -1 || firstBrace >= lastBrace) {
-      console.log(`${source}: No valid JSON structure (no braces)`);
-      return { success: false };
-    }
-    
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-    
-    if (!cleaned.startsWith('{')) {
-      console.log(`${source}: Doesn't start with {`);
-      return { success: false };
-    }
-    
-    const parsed = JSON.parse(cleaned);
-    
-    // Validate structure
-    if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
-      const validCards = parsed.cards.filter(card => 
-        card.front && card.back && 
-        typeof card.front === 'string' && 
-        typeof card.back === 'string'
-      );
-      
-      if (validCards.length > 0) {
-        console.log(`✅ Found ${validCards.length} valid cards in ${source}`);
-        
-        if (validCards.length !== parsed.cards.length) {
-          console.log(`⚠️ Filtered out ${parsed.cards.length - validCards.length} invalid cards`);
-          parsed.cards = validCards;
-        }
-        
-        return { success: true, json: JSON.stringify(parsed) };
-      } else {
-        console.log(`⚠️ ${source} has cards array but no valid cards`);
-      }
-    } else {
-      console.log(`⚠️ ${source} missing cards array or empty`);
-    }
-  } catch (e) {
-    console.log(`❌ Parse failed for ${source}:`, e.message);
+try {
+ // Aggressive cleaning - Step 1: Remove markdown and surrounding text
+ let cleaned = text
+ .replace(/^jsonCopy\s*/gi, '')
+.replace(/^json\s*/gi, '')
+.replace(/Copy\s*/gi, '')
+.replace(/```json\s*/gi, '')
+.replace(/```javascript\s*/gi, '')
+.replace(/```\s*/g, '').replace(/^[\s\n]+/, '').replace(/[\s\n]+$/, '').trim();
+
+    // 🔥 CRITICAL FIX: Remove illegal control characters from JSON strings 🔥
+    // This targets characters like unescaped newlines (\n) or carriage returns (\r)
+    // that cause the "Bad control character" error. Replacing them with a space
+    // ensures the JSON string integrity is maintained.
+    cleaned = cleaned.replace(/[\u0000-\u001F]/g, ' '); 
+    // Note: \u007F-\u009F (DEL and C1 controls) are also illegal in JSON but are less common.
+    // The range \u0000-\u001F should cover the primary offenders.
+ 
+ // Step 2: Find first { and last } to trim surrounding prose
+const firstBrace = cleaned.indexOf('{');
+const lastBrace = cleaned.lastIndexOf('}');
+
+ if (firstBrace === -1 || lastBrace === -1 || firstBrace >= lastBrace) {
+console.log(`${source}: No valid JSON structure (no braces)`);
+return { success: false };
+ }
+ 
+ cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+
+if (!cleaned.startsWith('{')) {
+console.log(`${source}: Doesn't start with {`);
+return { success: false };
+ }
+
+ // Step 3: Attempt to parse
+const parsed = JSON.parse(cleaned);
+ 
+ // Step 4: Validate structure
+ if (parsed.cards && Array.isArray(parsed.cards) && parsed.cards.length > 0) {
+ const validCards = parsed.cards.filter(card => 
+card.front && card.back && 
+ typeof card.front === 'string' && 
+typeof card.back === 'string'
+);
+
+if (validCards.length > 0) {
+ console.log(`✅ Found ${validCards.length} valid cards in ${source}`);
+ 
+ if (validCards.length !== parsed.cards.length) {
+ console.log(`⚠️ Filtered out ${parsed.cards.length - validCards.length} invalid cards`);
+parsed.cards = validCards;
+ }
+
+ // Return the re-stringified valid JSON
+return { success: true, json: JSON.stringify(parsed) };
+} else {
+  console.log(`⚠️ ${source} has cards array but no valid cards`);
+ }
+ } else {
+   console.log(`⚠️ ${source} missing cards array or empty`);
   }
-  
-  return { success: false };
+ } catch (e) {
+  console.log(`❌ Parse failed for ${source}:`, e.message);
+ }
+ 
+ return { success: false };
 }
 
 function copyToClipboard(text) {

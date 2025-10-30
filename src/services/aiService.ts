@@ -19,6 +19,10 @@ export interface ExtractionResult {
 
 export class AIService {
   private static readonly OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+  
+  // --- New Constants for Backoff ---
+  private static readonly MAX_RETRIES = 5;
+  private static readonly INITIAL_DELAY_MS = 1000; // 1 second
 
   static getApiKey(): string | null {
     // Check session storage first, then environment variable
@@ -76,7 +80,8 @@ export class AIService {
           const result = this.parseAIResponse(response, format);
           allResults.push(result);
           
-          // Small delay to avoid rate limits
+          // Small delay (500ms) is still helpful between chunks even with backoff in callOpenAI
+          // The delay prevents hitting the rate limit from a batch of sequential requests.
           if (i < chunks.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 500));
           }
@@ -176,7 +181,7 @@ export class AIService {
     
     // Detect if content is primarily French
     const isFrench = /[àâäæçéèêëïîôùûüÿœ]/i.test(text) || 
-                     /\b(le|la|les|un|une|des|est|sont|et|ou|dans|pour|avec)\b/i.test(text);
+                       /\b(le|la|les|un|une|des|est|sont|et|ou|dans|pour|avec)\b/i.test(text);
     
     if (format === 'cloze') {
       return `Create ${cardCount} cloze deletion flashcards from this ${isFrench ? 'French' : 'English'} medical/optometry content${chunkInfo}.
@@ -280,46 +285,81 @@ Return ONLY valid JSON (no markdown, no code blocks):
     }
   }
 
+  // --- MODIFIED: Implements Exponential Backoff for 429 errors ---
   private static async callOpenAI(prompt: string, apiKey: string): Promise<string> {
     console.log('Calling OpenAI API...');
-
-    const response = await fetch(this.OPENAI_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert medical educator creating high-quality Anki flashcards for optometry students. You understand both French and English medical terminology perfectly. CRITICAL: You MUST maintain the same language as the source material - if the source is in French, ALL cards must be in French; if English, ALL cards must be in English. You always respond with valid JSON only, with no markdown formatting or code blocks - just pure JSON.'
+    
+    // Loop for retries with Exponential Backoff
+    for (let attempt = 0; attempt < this.MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(this.OPENAI_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
           },
-          {
-            role: 'user',
-            content: prompt
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an expert medical educator creating high-quality Anki flashcards for optometry students. You understand both French and English medical terminology perfectly. CRITICAL: You MUST maintain the same language as the source material - if the source is in French, ALL cards must be in French; if English, ALL cards must be in English. You always respond with valid JSON only, with no markdown formatting or code blocks - just pure JSON.'
+              },
+              {
+                role: 'user',
+                content: prompt
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 4000, 
+            response_format: { type: "json_object" }
+          })
+        });
+
+        // SUCCESS: Request went through
+        if (response.ok) {
+          const data = await response.json();
+          return data.choices[0].message.content;
+        }
+
+        // FAILURE: Handle specific error codes
+        if (response.status === 401) {
+          // 401: Invalid API Key - Fatal error, do not retry
+          throw new Error('Invalid API key. Please check your OpenAI API key in Settings.');
+        }
+
+        if (response.status === 429) {
+          // 429: Rate Limit Exceeded - Check if we have more retries
+          if (attempt < this.MAX_RETRIES - 1) {
+            // Calculate exponential backoff delay
+            const delay = this.INITIAL_DELAY_MS * Math.pow(2, attempt) + Math.random() * 500;
+            console.warn(`Rate limit hit (429). Retrying in ${Math.round(delay / 100) / 10} seconds (Attempt ${attempt + 1}/${this.MAX_RETRIES}).`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue; // Go to the next attempt
+          } else {
+            // Last attempt failed
+            throw new Error('Rate limit exceeded after multiple retries. Please wait and try again later.');
           }
-        ],
-        temperature: 0.3,
-        max_tokens: 4000, // Increased for up to 50 cards
-        response_format: { type: "json_object" }
-      })
-    });
+        }
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error('Invalid API key. Please check your OpenAI API key in Settings.');
+        // Other HTTP errors (5xx, 400, 403, etc.) - Throw a generic error and stop retrying
+        const error = await response.json().catch(() => ({}));
+        throw new Error(`OpenAI API error (${response.status}): ${error.error?.message || response.statusText}`);
+
+      } catch (error) {
+        // If the error is a rate limit error but we haven't reached max retries, the 'continue' handles it.
+        // For other errors (401, parsing, network), we throw immediately.
+        // If it's the last retry and the 429 was thrown, it will fall through here.
+        if (error instanceof Error && error.message.includes('Rate limit exceeded') && attempt < this.MAX_RETRIES - 1) {
+           // Should be handled by the 'continue' inside the try block, but as a safeguard:
+           continue; 
+        }
+        throw error; // Re-throw any non-recoverable error
       }
-      if (response.status === 429) {
-        throw new Error('Rate limit exceeded. Please wait a moment and try again.');
-      }
-      const error = await response.json().catch(() => ({}));
-      throw new Error(`OpenAI API error (${response.status}): ${error.error?.message || response.statusText}`);
     }
-
-    const data = await response.json();
-    return data.choices[0].message.content;
+    
+    // Should be unreachable if MAX_RETRIES > 0, but as a final safety catch:
+    throw new Error('Failed to call OpenAI API after all retries.');
   }
 
   private static parseAIResponse(response: string, format: string): ExtractionResult {
